@@ -993,28 +993,36 @@ GET /v1/markets/{market_id}
 GET /v1/markets/regions
 ```
 
-有市場資料的縣市與各自的市場數，給前端做「選地區」的下拉選單。
+有市場資料的地區與各自的市場數，給前端做「選地區」的下拉選單。
 不分頁，直接回陣列。
 
-**Query 參數**：`country_code`（選填）
+**Query 參數**：`country_code`（選填。不給就回**所有國家**的地區）
 
 ```json
 [
-  { "region": "台中市", "market_count": 4 },
-  { "region": "台北市", "market_count": 4 },
-  { "region": "彰化縣", "market_count": 2 },
-  { "region": "雲林縣", "market_count": 1 }
+  { "region": "台中市",  "country_code": "TW", "market_count": 4 },
+  { "region": "台北市",  "country_code": "TW", "market_count": 4 },
+  { "region": "彰化縣",  "country_code": "TW", "market_count": 2 },
+  { "region": "Iganga", "country_code": "UG", "market_count": 1 },
+  { "region": "Kampala","country_code": "UG", "market_count": 1 }
 ]
 ```
 
-依市場數由多到少排序。拿到的 `region` 可以直接丟給 `GET /v1/markets?region=…`。
+**排序是「先國家、再市場數由多到少」**，同一國的地區會排在一起。
+
+每一筆都帶 `country_code`：不同國家可能有同名的地區，而且前端要能依國家
+分組顯示。要單看一國就帶 `country_code=UG`。
+
+拿到的 `region` 可以直接丟給 `GET /v1/markets?region=…`
+（跨國同名時請一併帶 `country_code`）。
 
 > 台灣的縣市名稱用 `台` 不用 `臺`（與農業部回傳的市場名稱一致），
 > 前端做比對時請注意。
 >
-> 這個 `region` 是**市場所在的縣市字串**，與使用者個人檔案的
-> `subdivision_code`（ISO 3166-2，例如 `TW-YUN`）是兩回事：
-> 前者來自官方資料來源的原始欄位，後者是平台自己的標準化代碼。
+> 這個 `region` 是**市場所在地區的名稱字串**，內容由各資料來源決定：
+> 台灣是縣市（台中市）、烏干達是 district（Iganga、Kampala）。
+> 它與使用者個人檔案的 `subdivision_code`（ISO 3166-2，例如 `TW-YUN`）
+> 是兩回事——後者是平台自己的標準化代碼，前者是市場清單的顯示與篩選用字串。
 
 ---
 

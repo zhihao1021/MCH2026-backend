@@ -142,6 +142,43 @@ async def test_markets_can_be_filtered() -> None:
     assert [m.external_id for m in markets] == ["owino"]
 
 
+@pytest.mark.anyio
+async def test_markets_carry_a_region() -> None:
+    """沒有 region 的市場不會出現在 /v1/markets/regions 的地區選單裡。"""
+    markets = await make_source().fetch_markets()
+    assert all(m.region for m in markets), [(m.name, m.region) for m in markets]
+    regions = {m.external_id: m.region for m in markets}
+    assert regions["mbale"] == "Mbale"      # 市場名就是 district 名
+    assert regions["owino"] == "Kampala"    # 靠覆蓋表：Owino 市場在坎帕拉
+
+
+def test_district_resolution_uses_iso_names() -> None:
+    """用 ISO 3166-2 的 district 名稱，才不會跟平台其他地方對不起來。"""
+    source = make_source()
+    assert source._district_for("iganga", "Iganga") == "Iganga"
+    assert source._district_for("mbarara", "Mbarara") == "Mbarara"
+    # 大小寫與空白不該影響比對
+    assert source._district_for("soroti", "  soroti ") == "Soroti"
+    # 對不上又沒有覆蓋就留空，而不是亂猜一個
+    assert source._district_for("nowhere", "Nowhere Market") is None
+
+
+def test_every_real_namis_market_resolves_to_a_district() -> None:
+    """NAMIS 目前的 9 個市場都要對得到 district，缺一個就少一個地區選項。"""
+    source = make_source()
+    live_markets = [
+        "Fort Portal", "Hoima", "Iganga", "Lira", "Mbale",
+        "Mbarara", "Owino", "Soroti", "Tororo",
+    ]
+    from slugify import slugify
+
+    unresolved = [
+        name for name in live_markets
+        if source._district_for(slugify(name), name) is None
+    ]
+    assert unresolved == []
+
+
 # ---------------------------------------------------------------------------
 # 欄位對位：這裡錯了不會報錯，只會把價格記到別的市場去
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from bs4 import BeautifulSoup
 from pydantic import Field
 from slugify import slugify
 
+from app.data.countries import list_subdivisions
 from app.extensions.base import (
     ExtensionConfig,
     FetchWindow,
@@ -53,6 +54,15 @@ DEFAULT_EXCLUDED_CATEGORIES = ("Animal Products", "Fish", "Poultry Products")
 
 # 「1,750」「1,750.50」都要吃得下；其他雜訊（"-"、"N/A"）一律視為沒有資料
 _NUMBER = re.compile(r"^-?[\d,]+(?:\.\d+)?$")
+
+# NAMIS 的市場名多半就是所在 district 的名字，所以優先用 ISO 3166-2 的
+# district 清單去對；對不上的才在這裡指定。這樣新增市場時多半不用改程式。
+_MARKET_DISTRICT_OVERRIDES = {
+    # Fort Portal 是城市，所在的 district 叫 Kabarole
+    "fort-portal": "Kabarole",
+    # Owino（St. Balikuddembe）是坎帕拉最大的市場
+    "owino": "Kampala",
+}
 
 
 class UgNamisConfig(ExtensionConfig):
@@ -116,16 +126,36 @@ class UgNamisSource(PriceSource):
             external_id = slugify(name)
             if wanted and external_id not in wanted:
                 continue
+            district = self._district_for(external_id, name)
             markets.append(
                 RawMarket(
                     external_id=external_id,
                     name=name,
                     name_en=name,
+                    # 不填 region 的話，市場就不會出現在 /v1/markets/regions
+                    # 的地區選單裡（那支端點會濾掉 region 為 NULL 的）
+                    region=district,
                     timezone=self.manifest.timezone,
-                    raw={"source": "namis_consumer_prices"},
+                    raw={"source": "namis_consumer_prices", "district": district},
                 )
             )
         return markets
+
+    @staticmethod
+    def _district_for(external_id: str, name: str) -> str | None:
+        """把市場對到所在的 district。
+
+        先用 ISO 3166-2 的 district 清單比對同名的，對不上再查覆蓋表。
+        用 ISO 而不是自己寫一份，名稱才不會跟平台其他地方對不起來。
+        """
+        override = _MARKET_DISTRICT_OVERRIDES.get(external_id)
+        if override:
+            return override
+        wanted = name.strip().lower()
+        for sub in list_subdivisions("UG", level=2):
+            if sub.name.strip().lower() == wanted:
+                return sub.name
+        return None
 
     # -- 價格 -------------------------------------------------------------
     async def fetch_prices(self, window: FetchWindow) -> AsyncIterator[RawPrice]:

@@ -138,9 +138,14 @@ class MarketOut(BaseModel):
 
 
 class RegionOut(BaseModel):
-    """有市場資料的地區。"""
+    """有市場資料的地區。
+
+    一定要帶 `country_code`：不只一個國家有資料之後，單看「台中市」和
+    「Iganga」是分不出哪個屬於哪一國的，前端也沒辦法分組。
+    """
 
     region: str
+    country_code: str
     market_count: int
 
 
