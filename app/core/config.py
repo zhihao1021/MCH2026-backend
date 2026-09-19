@@ -1,0 +1,134 @@
+"""應用組態。所有設定一律由環境變數 / .env 讀入，程式碼內不寫死任何連線資訊。"""
+
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from pydantic import Field, PostgresDsn, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=BASE_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # ---- 應用 ----
+    app_name: str = "AgriPrice API"
+    environment: Literal["development", "staging", "production"] = "development"
+    debug: bool = False
+    api_prefix: str = "/v1"
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
+
+    # ---- 資料庫 ----
+    # 例：postgresql+asyncpg://user:pass@host:5432/agriprice
+    database_url: PostgresDsn = Field(
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/agriprice"
+    )
+    db_echo: bool = False
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
+    # ---- 安全性 ----
+    secret_key: str = Field(default="change-me-in-production", min_length=8)
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_minutes: int = 60 * 12
+    refresh_token_ttl_days: int = 60
+    # OTP 雜湊用的 pepper，與 secret_key 分開以便單獨輪替
+    otp_pepper: str = Field(default="change-me-too")
+
+    # ---- OTP ----
+    otp_length: int = 6
+    otp_ttl_seconds: int = 300
+    otp_max_attempts: int = 5
+    otp_resend_cooldown_seconds: int = 60
+    otp_max_per_phone_per_hour: int = 5
+    # 開發用：把 OTP 直接回在 API response，正式環境務必為 false
+    otp_debug_echo: bool = False
+
+    default_country_code: str = "TW"
+    default_locale: str = "zh-Hant"
+
+    # ---- 簡訊 ----
+    sms_provider: Literal["console", "twilio"] = "console"
+    sms_sender_id: str = "AgriPrice"
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_from_number: str | None = None
+
+    # ---- 報價 ----
+    quote_default_ttl_hours: int = 48
+    quote_max_active_per_user: int = 50
+
+    # ---- Extension ----
+    extensions_dir: Path = BASE_DIR / "app" / "extensions"
+    # 留空 = 載入目錄下所有 extension；填了就只載入清單內的
+    extensions_enabled: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    extensions_disabled: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # 每個 extension 的組態：{"tw_moa": {"api_key": "..."}}
+    extensions_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    extension_http_timeout: float = 30.0
+    extension_user_agent: str = "AgriPriceBot/0.1 (+https://example.org/agriprice)"
+
+    # ---- 排程 ----
+    scheduler_enabled: bool = True
+    scheduler_timezone: str = "UTC"
+    # 首次啟動時是否立即補跑一次所有來源
+    scheduler_run_on_startup: bool = False
+
+    # ---- 維運 ----
+    admin_api_token: str | None = None
+    log_level: str = "INFO"
+    log_json: bool = False
+
+    @field_validator("cors_origins", "extensions_enabled", "extensions_disabled", mode="before")
+    @classmethod
+    def _split_csv(cls, v: Any) -> Any:
+        """允許 .env 以逗號分隔字串或 JSON 陣列兩種寫法。"""
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("["):
+                return json.loads(v)
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("extensions_config", mode="before")
+    @classmethod
+    def _parse_json_obj(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            return json.loads(v) if v else {}
+        return v
+
+    @property
+    def sqlalchemy_url(self) -> str:
+        return str(self.database_url)
+
+    @property
+    def sync_sqlalchemy_url(self) -> str:
+        """Alembic / 工具用的同步連線字串。"""
+        return str(self.database_url).replace("+asyncpg", "+psycopg2")
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

@@ -1,0 +1,17 @@
+# 執行期依賴。安裝：pip install -r requirements.txt
+fastapi>=0.141,<1.0
+uvicorn[standard]>=0.53
+sqlalchemy[asyncio]>=2.0.40,<2.1
+asyncpg>=0.31
+alembic>=1.20
+pydantic>=2.13,<3.0
+pydantic-settings>=2.15
+PyJWT[crypto]>=2.14
+httpx>=0.28
+APScheduler>=3.11,<4.0
+python-slugify>=9.1
+
+# 開發 / 測試
+pytest>=9.0
+pytest-asyncio>=1.4
+anyio>=4.15
