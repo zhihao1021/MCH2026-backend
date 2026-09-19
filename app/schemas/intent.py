@@ -122,8 +122,24 @@ class IntentSummaryOut(BaseModel):
 
     q1: Decimal | None = None
     q3: Decimal | None = None
-    lower_bound: Decimal | None = Field(default=None, description="IQR 容許區間下界")
-    upper_bound: Decimal | None = Field(default=None, description="IQR 容許區間上界")
+    lower_bound: Decimal | None = Field(
+        default=None,
+        description="IQR 容許區間下界。**只有 outlier_filter_active 為 true 時才實際生效**",
+    )
+    upper_bound: Decimal | None = Field(
+        default=None,
+        description="IQR 容許區間上界。**只有 outlier_filter_active 為 true 時才實際生效**",
+    )
+    outlier_filter_active: bool = Field(
+        default=False,
+        description=(
+            "這次聚合有沒有真的執行 IQR 離群排除。false 代表樣本數未達門檻，"
+            "區間外的值仍會被計入 sample_count / min_price / max_price"
+        ),
+    )
+    min_samples_for_outlier_filter: int = Field(
+        default=0, description="啟用離群排除所需的樣本數門檻"
+    )
     min_price: Decimal | None = None
     max_price: Decimal | None = None
     floor_price: Decimal | None = None
@@ -155,6 +171,8 @@ class IntentSummaryOut(BaseModel):
             q3=summary.q3,
             lower_bound=summary.lower_bound,
             upper_bound=summary.upper_bound,
+            outlier_filter_active=summary.outlier_filter_active,
+            min_samples_for_outlier_filter=summary.min_samples_for_outlier_filter,
             min_price=summary.min_price,
             max_price=summary.max_price,
             floor_price=summary.floor_price,
