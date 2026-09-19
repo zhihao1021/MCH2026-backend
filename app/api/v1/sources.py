@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import select
 
+from app.core import country_scope
 from app.core.deps import DbSession
 from app.core.errors import NotFoundError
 from app.extensions.registry import registry
@@ -25,12 +26,17 @@ async def list_sources(session: DbSession) -> SourceListOut:
     }
     loaded = {ext.key: ext for ext in registry.all()}
 
+    scope = country_scope.get_scope()
     out: list[SourceOut] = []
     # 以已載入的 extension 為主，再補上 DB 裡有但目前沒載入的（例如剛移除）
     for key in sorted(set(rows) | set(loaded)):
         ext = loaded.get(key)
         row = rows.get(key)
         manifest = ext.manifest if ext else None
+        # Demo 藏掉某國時，該國的資料來源也不該出現在清單裡
+        country = manifest.country_code if manifest else (row.country_code if row else None)
+        if not scope.allows(country):
+            continue
         out.append(
             SourceOut(
                 key=key,

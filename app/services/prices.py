@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import country_scope
 from app.core.pagination import PageParams
 from app.models.catalog import DataSource, Market
 from app.models.price import OfficialPrice
@@ -113,6 +114,12 @@ async def latest_official_prices(
         stmt = stmt.where(cond)
         count_stmt = count_stmt.where(cond)
 
+    # Demo 的國家範圍（兩個查詢都已經 join 了 markets）
+    scope = country_scope.condition(Market.country_code)
+    if scope is not None:
+        stmt = stmt.where(scope)
+        count_stmt = count_stmt.where(scope)
+
     stmt = (
         stmt.order_by(OfficialPrice.trade_date.desc(), Market.name)
         .limit(params.limit)
@@ -167,10 +174,14 @@ async def price_series(
 
     if market_id is not None:
         stmt = stmt.where(OfficialPrice.market_id == market_id)
-    if country_code:
-        stmt = stmt.join(Market, Market.id == OfficialPrice.market_id).where(
-            Market.country_code == country_code.upper()
-        )
+    # 走勢：country_code 與 Demo 範圍都要靠 markets，所以只 join 一次
+    scope = country_scope.condition(Market.country_code)
+    if country_code or scope is not None:
+        stmt = stmt.join(Market, Market.id == OfficialPrice.market_id)
+        if country_code:
+            stmt = stmt.where(Market.country_code == country_code.upper())
+        if scope is not None:
+            stmt = stmt.where(scope)
 
     rows = (await session.execute(stmt)).all()
     points = [
@@ -203,6 +214,7 @@ async def market_coverage(session: AsyncSession, product_id: uuid.UUID) -> list[
         .group_by(Market.id)
         .order_by(func.max(OfficialPrice.trade_date).desc())
     )
+    stmt = country_scope.apply(stmt, Market.country_code)
     return list((await session.execute(stmt)).scalars())
 
 

@@ -10,6 +10,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import country_scope
 from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import PageParams
 from app.models.catalog import DataSource, Market, Product, ProductName, ProductSourceMapping
@@ -151,6 +152,10 @@ async def list_markets(
     conditions = []
     if only_active:
         conditions.append(Market.is_active.is_(True))
+    # Demo 的國家範圍
+    scope = country_scope.condition(Market.country_code)
+    if scope is not None:
+        conditions.append(scope)
     if country_code:
         conditions.append(Market.country_code == country_code.upper())
     if region:
@@ -236,4 +241,5 @@ async def list_regions(
     )
     if country_code:
         stmt = stmt.where(Market.country_code == country_code.upper())
+    stmt = country_scope.apply(stmt, Market.country_code)
     return [(region, cc, n) for region, cc, n in (await session.execute(stmt)).all()]

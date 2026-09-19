@@ -144,6 +144,243 @@ FARMERS: list[FarmerSpec] = [
             QuoteSpec("pineapple", "36.0", quantity="900", min_order="20"),
         ],
     ),
+    # ---- 台灣：再補幾個產地，讓地圖 / 距離查詢有東西可玩 ----
+    # 座標取各鄉鎮市區公所附近，是示範用的概略位置，不是真實農場座標。
+    FarmerSpec(
+        phone="+886900000107",
+        display_name="許耀宗",
+        business_name="溪湖蔬菜產銷班",
+        bio="溪湖一帶的葉菜與瓜果，每天凌晨進彰化市場，也接餐廳直送。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-CHA", locality="溪湖鎮",
+            postal_code="514",
+            latitude=23.962200, longitude=120.479700,
+            visibility=LocationVisibility.REGION,
+        ),
+        quotes=[
+            QuoteSpec("cabbage", "28.5", quantity="2200", min_order="100",
+                      note="初秋種，早上採下午到", market_external_id="514"),
+            QuoteSpec("cauliflower", "52.0", quantity="600", min_order="50"),
+            QuoteSpec("luffa", "38.0", quantity="450", note="澎湖絲瓜品系"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+886900000108",
+        display_name="劉秋香",
+        business_name="東勢高接梨園",
+        bio="大甲溪畔的高接梨與甜柿，海拔約 500 公尺，日夜溫差大。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-TXG", locality="東勢區",
+            postal_code="423",
+            latitude=24.258600, longitude=120.827700,
+            visibility=LocationVisibility.APPROXIMATE,
+        ),
+        quotes=[
+            QuoteSpec("pear", "135.0", quantity="500", min_order="10",
+                      grade="新興梨 特級", note="已套袋，論斤計價",
+                      market_external_id="423"),
+            QuoteSpec("persimmon", "88.0", quantity="700", grade="甜柿 9A"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+886900000109",
+        display_name="游進發",
+        business_name="三星青蔥產銷",
+        bio="三星鄉的蔥，砂質壤土種出來的蔥白長。雨季產量會掉，請先預訂。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-ILA", locality="三星鄉",
+            postal_code="266",
+            latitude=24.665300, longitude=121.652100,
+            visibility=LocationVisibility.EXACT,
+        ),
+        quotes=[
+            QuoteSpec("green-onion", "165.0", quantity="300", min_order="20",
+                      grade="三星蔥", note="雨後會漲，價格每日調整",
+                      market_external_id="260"),
+            QuoteSpec("white-radish", "26.0", quantity="500"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+886900000110",
+        display_name="蔡文良",
+        business_name="梅山高冷菜園",
+        bio="梅山海拔 800 至 1200 公尺的高冷蔬菜，夏天品質最好。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-CYQ", locality="梅山鄉",
+            postal_code="603",
+            latitude=23.584700, longitude=120.555500,
+            visibility=LocationVisibility.REGION,
+        ),
+        quotes=[
+            QuoteSpec("lettuce", "72.0", quantity="280", min_order="20",
+                      note="高冷地結球萵苣，需冷鏈", market_external_id="600"),
+            QuoteSpec("napa-cabbage", "34.0", quantity="900", min_order="50"),
+            QuoteSpec("bell-pepper", "118.0", quantity="150", grade="彩椒混色"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+886900000111",
+        display_name="鍾美珠",
+        business_name="美濃客庄農園",
+        bio="美濃的白玉蘿蔔與牛番茄，冬季裡作。可安排農場自取。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-KHH", locality="美濃區",
+            postal_code="843",
+            latitude=22.888200, longitude=120.541400,
+            visibility=LocationVisibility.EXACT,
+        ),
+        quotes=[
+            QuoteSpec("white-radish", "24.0", quantity="1200", min_order="100",
+                      grade="白玉蘿蔔", note="裡作限定，約到二月底",
+                      market_external_id="830"),
+            QuoteSpec("tomato", "68.0", quantity="400", grade="牛番茄 特級"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+886900000112",
+        display_name="潘建成",
+        business_name="鹿野釋迦園",
+        bio="鹿野高台的鳳梨釋迦，外銷等級。產期十二月到隔年三月。",
+        location=dict(
+            country_code="TW", subdivision_code="TW-TTT", locality="鹿野鄉",
+            postal_code="955",
+            latitude=22.913700, longitude=121.137000,
+            visibility=LocationVisibility.APPROXIMATE,
+        ),
+        quotes=[
+            QuoteSpec("sugar-apple", "175.0", quantity="600", min_order="10",
+                      grade="鳳梨釋迦 外銷級", note="產期限定，需預訂",
+                      market_external_id="930"),
+            QuoteSpec("dragon-fruit", "82.0", quantity="350", grade="紅肉"),
+        ],
+    ),
+    # ---- 烏干達：Demo 的主要場景 ----
+    # 價格用 UGX / kg，與 ug_namis 抓回來的官方行情同尺度，比較才有意義。
+    # subdivision_code 只有四個大區（UG-C/E/N/W），縣名放 locality。
+    # 座標取各城鎮中心，是示範用的概略位置。
+    FarmerSpec(
+        phone="+256770000201",
+        display_name="Sarah Nakato",
+        business_name="Nakato Matooke Gardens",
+        bio="Matooke and coffee bananas from the Masaka hills. Harvest twice a week, "
+            "can deliver to Owino market in Kampala.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-C", locality="Masaka",
+            latitude=-0.334100, longitude=31.734800,
+            visibility=LocationVisibility.REGION,
+        ),
+        quotes=[
+            QuoteSpec("cooking-banana", "1450", quantity="4000", min_order="200",
+                      grade="Matooke - medium bunch",
+                      note="Price per kg; bunches average 18-22 kg",
+                      market_external_id="owino"),
+            QuoteSpec("banana", "2300", quantity="600", grade="Apple banana (Ndiizi)"),
+            QuoteSpec("avocado", "3200", quantity="450", note="Hass, picked to order"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+256770000202",
+        display_name="Joseph Wanyama",
+        business_name="Wanyama Family Farm",
+        bio="Maize, beans and groundnuts on 12 acres near Mbale. Dried and graded "
+            "on site, moisture below 14%.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-E", locality="Mbale",
+            latitude=1.082700, longitude=34.175000,
+            visibility=LocationVisibility.EXACT,
+        ),
+        quotes=[
+            QuoteSpec("maize", "880", quantity="12000", min_order="1000",
+                      grade="Grade 1, dried",
+                      note="Moisture < 14%, sold in 100 kg bags",
+                      market_external_id="mbale"),
+            QuoteSpec("common-bean", "3400", quantity="3000", min_order="500",
+                      grade="Nambale"),
+            QuoteSpec("peanut", "5900", quantity="800", grade="Red beauty, shelled"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+256770000203",
+        display_name="Grace Akello",
+        business_name="Akello Grain Store",
+        bio="Simsim, sorghum and millet from Lira. Buying from a group of 40 "
+            "smallholders, so larger volumes are possible with notice.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-N", locality="Lira",
+            latitude=2.235000, longitude=32.909700,
+            visibility=LocationVisibility.APPROXIMATE,
+        ),
+        quotes=[
+            QuoteSpec("sesame", "6100", quantity="2500", min_order="500",
+                      grade="Simsim, white", market_external_id="lira"),
+            QuoteSpec("sorghum", "1050", quantity="6000", min_order="1000"),
+            QuoteSpec("millet", "2500", quantity="1800", min_order="200",
+                      note="Finger millet, cleaned"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+256770000204",
+        display_name="Robert Tumusiime",
+        business_name="Ankole Highland Produce",
+        bio="Irish potatoes, tomatoes and onions from the Mbarara highlands. "
+            "Cold store available, so supply is steady outside the rains.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-W", locality="Mbarara",
+            latitude=-0.607200, longitude=30.654500,
+            visibility=LocationVisibility.REGION,
+        ),
+        quotes=[
+            QuoteSpec("potato", "1400", quantity="8000", min_order="500",
+                      grade="Irish, Rwangume", market_external_id="mbarara"),
+            QuoteSpec("tomato", "1050", quantity="1200", min_order="100",
+                      note="Field grown; graded, packed in crates"),
+            QuoteSpec("onion", "2600", quantity="900"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+256770000205",
+        display_name="Betty Nabirye",
+        business_name="Nabirye Cassava Milling",
+        bio="Fresh cassava and cassava flour milled in Iganga. Flour is sun dried "
+            "and sieved, packed in 50 kg bags.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-E", locality="Iganga",
+            latitude=0.609300, longitude=33.468600,
+            visibility=LocationVisibility.EXACT,
+        ),
+        quotes=[
+            QuoteSpec("cassava", "900", quantity="5000", min_order="500",
+                      note="Fresh roots, harvested to order",
+                      market_external_id="iganga"),
+            QuoteSpec("cassava-flour", "950", quantity="2200", min_order="200",
+                      grade="Sun dried, sieved"),
+            QuoteSpec("sweet-potato", "1600", quantity="1500", grade="White fleshed"),
+        ],
+    ),
+    FarmerSpec(
+        phone="+256770000206",
+        display_name="Daniel Mugisha",
+        business_name="Rwenzori Fruit Collective",
+        bio="Passion fruit and pineapple from the Rwenzori foothills near Fort Portal. "
+            "A collective of 25 growers; we consolidate and grade together.",
+        locale="en",
+        location=dict(
+            country_code="UG", subdivision_code="UG-W", locality="Fort Portal",
+            latitude=0.671000, longitude=30.274800,
+            visibility=LocationVisibility.APPROXIMATE,
+        ),
+        quotes=[
+            QuoteSpec("passion-fruit", "7400", quantity="700", min_order="50",
+                      grade="Purple, grade A", market_external_id="fort-portal"),
+            QuoteSpec("pineapple", "2700", quantity="1600", min_order="100",
+                      grade="Smooth cayenne"),
+        ],
+    ),
     # ---- 日本：語系、幣別、地址寫法都不同 ----
     FarmerSpec(
         phone="+819000000105",

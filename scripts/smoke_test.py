@@ -418,6 +418,12 @@ class Smoke:
             return
         quote = r.json()
 
+        # 報價應沿用個人檔案的座標與地區（沒設位置的帳號則兩者皆空）
+        loc = self.req("GET", "/me/location", headers=auth)
+        if loc.status_code == 200 and loc.json().get("latitude") is not None:
+            self.check("報價沿用個人檔案地區",
+                       quote.get("region") is not None, f"region={quote.get('region')}")
+
         r = self.req("GET", f"/quotes?product_id={product_id}")
         self.check("GET /quotes", r.status_code == 200 and r.json()["total"] > 0,
                    f"total={r.json().get('total')}")

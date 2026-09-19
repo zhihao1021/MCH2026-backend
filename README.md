@@ -314,6 +314,35 @@ curl -X POST localhost:8000/v1/auth/otp/verify -H "Content-Type: application/jso
 `dev_login.py` 省略 `--phone` 時會隨機產生號碼，所以連續跑不會撞到前兩項。
 另外每次索取新碼都會把同號碼的舊碼作廢，別拿上一封的號碼去驗。
 
+### Demo 用的國家範圍過濾
+
+資料庫裡同時有台灣（七萬多筆行情、22 個市場）與烏干達的資料。
+Demo 給烏干達看時台灣會把畫面洗掉，所以有一個讀取層的開關：
+
+```dotenv
+DEMO_VISIBLE_COUNTRIES=UG    # 白名單：只顯示烏干達
+DEMO_HIDDEN_COUNTRIES=TW     # 黑名單：只藏掉台灣
+```
+
+白名單優先，兩個都留空（預設）就不過濾。實測 `DEMO_HIDDEN_COUNTRIES=TW`：
+
+| | 不過濾 | 藏台灣 |
+| --- | --- | --- |
+| `/markets` | 31 | 9 |
+| `/markets/regions` | 22 | 9 |
+| `/quotes` | 53 | 23 |
+| `/sources` | demo_mock, tw_moa, ug_namis | ug_namis |
+| `/products/tomato/overview` | 10 個市場、TWD | 2 個市場、UGX |
+
+**只影響讀取，不刪任何資料，也不影響註冊與寫入。** 台灣使用者照樣能註冊、
+報價，只是在 Demo 設定下看不到自己的資料——這是展示用的視角，不是權限控制。
+`/v1/geo/countries` 也不過濾，否則使用者沒辦法填自己的所在地。
+
+實作在 `app/core/country_scope.py`，套用點是 `list_markets` / `list_regions` /
+`latest_official_prices` / `price_series` / `market_coverage` / `list_quotes` /
+`quote_stats` 與 `/v1/sources`。**新增有國別的查詢時記得一併套用**，
+否則會出現「清單說 12 筆、點進去只有 3 筆」這種不一致。
+
 ### 使用者位置與「定位」按鈕
 
 `PUT /v1/me/location` 可以存座標（`latitude` / `longitude`）與行政區。

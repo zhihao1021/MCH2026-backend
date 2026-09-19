@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     quote_default_ttl_hours: int = 48
     quote_max_active_per_user: int = 50
 
+    # ---- Demo 用的國家範圍 ----
+    # 讀取層的過濾：只影響市場 / 行情 / 地區 / 報價 / 資料來源的查詢結果，
+    # 不影響註冊與寫入，也不刪任何資料。白名單優先。
+    # 例：DEMO_VISIBLE_COUNTRIES=UG 只顯示烏干達；DEMO_HIDDEN_COUNTRIES=TW 只藏台灣
+    demo_visible_countries: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    demo_hidden_countries: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     # ---- IP 反查位置 ----
     # Cloud Phone 不支援 Geolocation API，所以「取得目前位置」只能靠
     # X-Forwarded-For 裡的真實 IP 反查。結果是城市級的推估，僅供建議。
@@ -102,7 +109,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
 
-    @field_validator("cors_origins", "extensions_enabled", "extensions_disabled", mode="before")
+    @field_validator(
+        "cors_origins",
+        "extensions_enabled",
+        "extensions_disabled",
+        "demo_visible_countries",
+        "demo_hidden_countries",
+        mode="before",
+    )
     @classmethod
     def _split_csv(cls, v: Any) -> Any:
         """允許 .env 以逗號分隔字串或 JSON 陣列兩種寫法。"""

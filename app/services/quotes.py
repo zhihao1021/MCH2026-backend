@@ -11,6 +11,7 @@ from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import country_scope
 from app.core.config import settings
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError
 from app.data.countries import default_currency, lookup_subdivision
@@ -95,8 +96,15 @@ async def create_quote(
         # 沒指定就沿用個人檔案的所在地（行政區名優先，其次自由輸入的城鎮）
         region=region or _user_region(user),
         location_text=location_text,
-        latitude=latitude,
-        longitude=longitude,
+        # 座標同樣沿用個人檔案。這是「產地在哪」的資料，報價時很少會不一樣，
+        # 每次都要小農重填一次不合理。
+        #
+        # 注意：`QuoteOut` 目前不輸出座標，所以這裡存的值不會外流。
+        # 日後若要做「離我最近的報價」而需要露出座標，
+        # 必須先套用報價者的 `location_visibility`（private / region 不得給精確值），
+        # 否則會繞過使用者自己設定的公開程度。
+        latitude=latitude if latitude is not None else user.latitude,
+        longitude=longitude if longitude is not None else user.longitude,
         note=note,
         contact_phone_public=(
             user.contact_phone_public if contact_phone_public is None else contact_phone_public
@@ -139,6 +147,10 @@ async def list_quotes(
         conditions.append(Quote.role_snapshot == role)
     if country_code:
         conditions.append(Quote.country_code == country_code.upper())
+    # Demo 的國家範圍
+    scope = country_scope.condition(Quote.country_code)
+    if scope is not None:
+        conditions.append(scope)
     if region:
         conditions.append(Quote.region == region)
     if market_id is not None:
@@ -178,6 +190,8 @@ async def quote_stats(
     )
     if side is not None:
         stmt = stmt.where(Quote.side == side)
+    # 摘要要跟清單看到的是同一批，否則「12 筆報價」點進去只有 3 筆
+    stmt = country_scope.apply(stmt, Quote.country_code)
 
     count, lo, hi, avg, currency, unit = (await session.execute(stmt)).one()
     return QuoteStats(
