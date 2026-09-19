@@ -1523,7 +1523,7 @@ GET /v1/products/{ref}/intents/summary?region=臺北市
   "excluded_count": 3,
   "exclusions": { "outlier": 3 },
   "outlier_filter_active": true,
-  "min_samples_for_outlier_filter": 8
+  "min_samples_for_outlier_filter": 3
 }
 ```
 
@@ -1531,26 +1531,40 @@ GET /v1/products/{ref}/intents/summary?region=臺北市
 | --- | --- |
 | `anchor_price` | **這才是要顯示的錨點**：信譽加權的中位數 |
 | `median` / `trimmed_mean` | 未加權的中位數與截尾均值，供對照 |
-| `lower_bound` / `upper_bound` | IQR 容許區間。**只有 `outlier_filter_active` 為 `true` 時才真的用來排除** |
+| `lower_bound` / `upper_bound` | IQR 容許區間，**用倍率護欄之後的樣本算出來的** |
 | `outlier_filter_active` | 這次聚合有沒有執行離群排除。見下方說明 |
-| `min_samples_for_outlier_filter` | 啟用排除所需的樣本數門檻（`INTENT_MIN_SAMPLES_FOR_IQR`，預設 8） |
+| `min_samples_for_outlier_filter` | 開始有防護所需的樣本數（`INTENT_MIN_SAMPLES_FOR_RATIO_GUARD`，預設 3） |
 | `demand_quantity` | 需求總量（只加總有填數量的意向）。`null` 代表沒人填數量 |
 | `sample_count` | 納入計算的筆數 |
 | `exclusions` | 各排除原因的筆數，例如 `{"outlier": 3, "shadowed": 1}` |
 
-> **樣本不足時不做離群排除。** `sample_count` 未達
-> `min_samples_for_outlier_filter` 時，`outlier_filter_active` 會是 `false`，
-> 這時**區間外的值仍會被計入** `sample_count` 與 `min_price` / `max_price`，
-> `exclusions` 也不會出現 `outlier`。
->
-> 這是刻意的：五筆樣本的四分位數不具統計意義，硬濾會把正常的價差當成
-> 離群值砍掉，錯殺真實需求的代價高於放進一筆極端值。錨點本身仍受中位數
-> 保護——例如 `1000 / 1050 / 980 / 1100 / 15000` 這五筆，`upper_bound`
-> 會算出 1250 且 15000 確實在區間外，但因為只有 5 筆所以不排除，
-> `anchor_price` 仍是正確的 1050，而 `max_price` 會顯示 15000。
->
-> **前端請依 `outlier_filter_active` 決定要不要顯示 `min_price` / `max_price`
-> 區間**，為 `false` 時那兩個值可能被單一惡意出價撐開。
+#### 離群排除的兩層
+
+擋的東西不一樣，所以分開做：
+
+| 層 | 門檻 | 規則 | 擋什麼 |
+| --- | --- | --- | --- |
+| 倍率護欄 | 3 筆 | 偏離**中位數** `INTENT_MAX_MEDIAN_RATIO` 倍（預設 5）以上 | 量級層次的灌水，例如中位數 850 卻出價 12000 |
+| IQR | 8 筆 | 落在 `lower_bound` / `upper_bound` 之外 | 幅度較小、要看分布才判斷得出來的離群值 |
+
+兩層都記為 `outlier`，`exclusions` 不區分來源。
+
+**護欄先跑。** 兩筆以上協同的極端值會把 Q3 撐高、容許區間跟著放寬，
+幅度小一點的灌水值就能躲過 IQR；先砍掉量級層次的假值，IQR 才會在
+乾淨的分布上判斷。所以 `q1` / `q3` / `lower_bound` / `upper_bound`
+都是**護欄之後**的樣本算出來的。
+
+倍率設在 5 倍是刻意放寬：真實的品質價差、產地價差很少超過兩三倍，
+這個設定幾乎不可能誤殺，但足以擋下量級層次的操縱。
+
+> **少於 3 筆時完全不排除**，`outlier_filter_active` 會是 `false`，
+> 這時區間外的值仍會計入 `sample_count` 與 `min_price` / `max_price`。
+> 前端請依這個旗標決定要不要顯示價格區間。
+
+> **已知限制：攻擊者佔過半時護欄會反轉。** 基準是中位數，一旦惡意出價
+> 成為多數，中位數就被搬走，被排除的反而是誠實的那一邊。任何以中位數
+> 為錨的機制都有這個性質。過半灌票不是離群值問題，防線在別處：
+> 信譽權重、冷卻期、影子封禁、機房 IP 偵測——那些擋的是同一個人灌很多筆。
 
 > **刻意不提供算術平均。** 一筆惡意的 999999 就能把平均拉垮，中位數卻
 > 幾乎不動——這是 PRD 目標一的核心。實測 12 筆正常意向被灌入 3 筆
@@ -1569,7 +1583,7 @@ GET    /v1/me/reputation
 | 值 | 意思 |
 | --- | --- |
 | `null` | 有計入 |
-| `outlier` | 落在 IQR 容許區間外 |
+| `outlier` | 被離群排除擋下（倍率護欄或 IQR，見 9.3） |
 | `below_floor` | 低於成本底線 |
 | `shadowed` | 提交者被影子封禁 |
 | `untrusted_ip` | 來自機房 / Proxy IP |

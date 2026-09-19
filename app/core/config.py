@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     intent_trim_fraction: float = Field(default=0.1, ge=0.0, le=0.4)
     # 樣本太少時做 IQR 只會誤殺，低於這個數就不過濾
     intent_min_samples_for_iqr: int = Field(default=8, ge=3)
+    # 與樣本數無關的絕對護欄：偏離中位數超過這個倍率就排除。
+    # IQR 需要足夠樣本才有意義，但「中位數 850 卻出價 12000」這種
+    # 量級的離譜值，三筆樣本時也該擋掉——中位數本身夠穩，拿它當基準安全
+    intent_max_median_ratio: float = Field(default=5.0, ge=2.0, le=50.0)
+    intent_min_samples_for_ratio_guard: int = Field(default=3, ge=3)
     # 目標一：成本硬約束。底線 = 近 N 日官方行情中位數 x ratio + 物流費
     intent_floor_lookback_days: int = Field(default=7, ge=1, le=90)
     intent_floor_ratio: float = Field(default=0.7, ge=0.0, le=2.0)

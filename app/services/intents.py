@@ -332,11 +332,12 @@ class IntentSummary:
 
     floor_price: Decimal | None
 
-    # IQR 離群過濾這次有沒有真的生效。樣本太少時不做過濾（見 summarise），
-    # 但 q1/q3/lower_bound/upper_bound 仍會回報——那是樣本的描述統計。
-    # 沒有這個旗標的話，呼叫端會看到一組界線卻不知道它沒有被執行。
+    # 這次有沒有真的執行離群排除（倍率護欄或 IQR 任一生效就算）。
+    # 兩層都有樣本數門檻，全都未達時 q1/q3/lower_bound/upper_bound 仍會
+    # 回報——那是樣本的描述統計。沒有這個旗標的話，呼叫端會看到一組
+    # 界線卻不知道它沒有被執行。
     outlier_filter_active: bool = False
-    # 要幾筆才會啟用過濾，讓前端能顯示「再 N 筆就會開始濾離群值」
+    # 要幾筆才會開始有防護（倍率護欄的門檻，比 IQR 低很多）
     min_samples_for_outlier_filter: int = 0
 
     # 需求總量（只加總有填數量的意向）與有填數量的人數。
@@ -347,18 +348,36 @@ class IntentSummary:
     exclusions: dict[str, int] = field(default_factory=dict)
 
 
-def outlier_filter_enabled(sample_count: int, bounds: st.OutlierBounds | None) -> bool:
+def iqr_filter_enabled(sample_count: int, bounds: st.OutlierBounds | None) -> bool:
     """這批樣本要不要執行 IQR 離群排除。
 
-    樣本太少時一律不做：三、五筆的四分位數不具意義，硬做會把正常的價差
-    當成離群值砍掉，代價是錯殺真實需求。
-
-    代價是另一邊——樣本未達門檻時，一筆極端值會照常計入 `sample_count`
-    與 `min_price` / `max_price`。錨點本身仍受中位數保護，但呼叫端必須
-    知道界線沒有被執行，所以 `summarise` 會把這個結果放進
-    `IntentSummary.outlier_filter_active` 一併回報。
+    樣本太少時不做：三、五筆的四分位數不具意義，硬做會把正常的價差
+    當成離群值砍掉。細緻的離群判斷需要足夠樣本才站得住腳。
     """
     return bounds is not None and sample_count >= settings.intent_min_samples_for_iqr
+
+
+def ratio_guard_bounds(values: list[Decimal]) -> tuple[Decimal, Decimal] | None:
+    """以中位數為基準的絕對倍率護欄，回 (下限, 上限)。
+
+    IQR 有樣本數門檻，所以樣本不足時完全沒有防線——五筆意向裡塞一筆
+    中位數 14 倍的價格，過去會原封不動計入 `sample_count` 與 `max_price`。
+    這一層補的就是那個缺口：它只需要三筆樣本，因為基準是中位數而不是
+    四分位距，一筆極端值拉不動它。
+
+    倍率刻意放寬（預設 5 倍）。真實的品質價差、產地價差很少超過兩三倍，
+    設在 5 倍幾乎不可能誤殺，但足以擋下量級層次的灌水。細緻的離群值
+    仍然交給樣本夠多時的 IQR，兩層互補而不是取代。
+
+    回 `None` 代表這批不適用（樣本不足，或中位數非正數算不出比例）。
+    """
+    if len(values) < settings.intent_min_samples_for_ratio_guard:
+        return None
+    med = st.median(values)
+    if med is None or med <= 0:
+        return None
+    ratio = Decimal(str(settings.intent_max_median_ratio))
+    return (med / ratio, med * ratio)
 
 
 async def summarise(
@@ -377,9 +396,15 @@ async def summarise(
     這樣使用者查自己的意向時看得到「為什麼沒被計入」，
     信譽計算也才有依據。
 
-    注意 IQR 過濾有樣本數門檻（`INTENT_MIN_SAMPLES_FOR_IQR`），未達門檻時
-    **不會排除任何離群值**，但 `lower_bound` / `upper_bound` 仍照常回報。
-    回應的 `outlier_filter_active` 會說明這次到底有沒有濾。
+    離群排除分兩層，因為兩者擋的是不同東西：
+
+    1. **倍率護欄**（`ratio_guard_bounds`，3 筆起）：偏離中位數 5 倍以上
+       一律排除。擋的是量級層次的灌水，樣本再少也有效。
+    2. **IQR**（`iqr_filter_enabled`，預設 8 筆起）：擋的是幅度較小、
+       需要靠分布才判斷得出來的離群值。
+
+    兩層都未達門檻時不會排除任何東西，但 `lower_bound` / `upper_bound`
+    仍照常回報，所以 `outlier_filter_active` 會說明這次到底有沒有濾。
     """
     stmt = (
         select(PriceIntent)
@@ -420,25 +445,42 @@ async def summarise(
             q1=None, q3=None, lower_bound=None, upper_bound=None,
             min_price=None, max_price=None, floor_price=floor.floor, exclusions=exclusions,
             outlier_filter_active=False,
-            min_samples_for_outlier_filter=settings.intent_min_samples_for_iqr,
+            min_samples_for_outlier_filter=settings.intent_min_samples_for_ratio_guard,
         )
 
-    prices = [i.price for i in candidates]
+    outlier_ids: list[uuid.UUID] = []
+
+    def _drop(intent: PriceIntent) -> None:
+        outlier_ids.append(intent.id)
+        exclusions[IntentExclusion.OUTLIER.value] = (
+            exclusions.get(IntentExclusion.OUTLIER.value, 0) + 1
+        )
+
+    # 第一層：倍率護欄。順序不能對調——兩筆以上協同的極端值會把 Q3
+    # 撐高、容許區間跟著放寬，幅度小一點的灌水值就能躲過 IQR。
+    # 先砍掉量級層次的假值，IQR 才會在乾淨的分布上判斷
+    guard = ratio_guard_bounds([i.price for i in candidates])
+    survivors: list[PriceIntent] = []
+    for intent in candidates:
+        if guard is not None and not (guard[0] <= intent.price <= guard[1]):
+            _drop(intent)
+            continue
+        survivors.append(intent)
+
+    # 第二層：IQR。界線與四分位數都用護欄後的樣本算，回報的數字才與
+    # 實際套用的一致
+    prices = [i.price for i in survivors]
     bounds = st.iqr_bounds(prices, settings.intent_iqr_multiplier)
     quart = st.quartiles(prices)
-
-    filter_active = outlier_filter_enabled(len(candidates), bounds)
+    iqr_active = iqr_filter_enabled(len(survivors), bounds)
+    filter_active = guard is not None or iqr_active
 
     kept: list[PriceIntent] = []
-    outlier_ids: list[uuid.UUID] = []
-    for intent in candidates:
-        if filter_active:
+    for intent in survivors:
+        if iqr_active:
             assert bounds is not None
             if not bounds.contains(intent.price):
-                outlier_ids.append(intent.id)
-                exclusions[IntentExclusion.OUTLIER.value] = (
-                    exclusions.get(IntentExclusion.OUTLIER.value, 0) + 1
-                )
+                _drop(intent)
                 continue
         kept.append(intent)
 
@@ -468,7 +510,7 @@ async def summarise(
         floor_price=floor.floor,
         exclusions=exclusions,
         outlier_filter_active=filter_active,
-        min_samples_for_outlier_filter=settings.intent_min_samples_for_iqr,
+        min_samples_for_outlier_filter=settings.intent_min_samples_for_ratio_guard,
         demand_quantity=_sum_quantity(kept),
         demand_respondents=sum(1 for i in kept if i.quantity is not None),
     )
