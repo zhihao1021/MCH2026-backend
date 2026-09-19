@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Claude Code 的本機工作目錄。worktree 是各自機器上的路徑，
+# 提交進去會在 clone / 部署時變成一個初始化不了的 submodule。
+.claude/
+
 # Python
 .venv/
 venv/

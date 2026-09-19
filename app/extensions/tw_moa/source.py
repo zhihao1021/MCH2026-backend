@@ -46,26 +46,40 @@ PAGE_SIZE = 1000
 # 農產品種類代碼：蔬菜 / 水果 / 花卉。用來在無 key 模式下輔助市場發現。
 _TCTYPES = ("N04", "N05", "N06")
 
-# 目前農產品交易行情站上有公告的批發市場代碼表。
-# 用於：1) 市場發現失敗時的備援；2) 確保不會漏掉只交易單一類別的市場。
-# 發現到的市場會覆蓋這裡的名稱，所以名稱過時也無妨。
-_DEFAULT_MARKETS: dict[str, str] = {
-    "104": "台北二",
-    "105": "台北市場",
-    "109": "台北一",
-    "220": "板橋區",
-    "241": "三重區",
-    "260": "宜蘭市",
-    "338": "桃農",
-    "400": "台中市",
-    "420": "豐原區",
-    "423": "東勢鎮",
-    "514": "彰化市場",
-    "600": "嘉義市",
-    "700": "台南市場",
-    "800": "高雄市",
-    "830": "鳳山區",
-    "930": "台東市",
+# 批發市場代碼 -> (名稱, 縣市)。
+#
+# MOA 的價格 API 只回 MarketCode 與 MarketName，**沒有縣市欄位**，
+# 所以 region 只能靠這份對照表補；少了它 markets.region 會全是 NULL，
+# 前端就沒辦法做「只看我附近的市場」。
+#
+# 這份清單同時是無 key 模式下逐市場切片的依據。發現邏輯靠單日查詢，
+# 但那個查詢幾乎每天都被 1000 筆截斷（露出的市場數在 4~16 之間跳），
+# 所以維護這份清單是必要的，不能只靠動態發現。
+#
+# 名稱會被 API 實際回傳的值覆蓋，所以名稱過時無妨；縣市則以這裡為準。
+_DEFAULT_MARKETS: dict[str, tuple[str, str]] = {
+    "104": ("台北二", "台北市"),
+    "105": ("台北市場", "台北市"),
+    "109": ("台北一", "台北市"),
+    "220": ("板橋區", "新北市"),
+    "241": ("三重區", "新北市"),
+    "260": ("宜蘭市", "宜蘭縣"),
+    "338": ("桃農", "桃園市"),
+    "400": ("台中市", "台中市"),
+    "420": ("豐原區", "台中市"),
+    "423": ("東勢鎮", "台中市"),
+    "512": ("永靖鄉", "彰化縣"),
+    # 514 底下其實有兩個市場：彰化市場（花卉）與溪湖鎮（蔬果），
+    # MOA 給了同一個代碼。兩者都在彰化縣，所以 region 不受影響。
+    "514": ("彰化市場", "彰化縣"),
+    "540": ("南投市", "南投縣"),
+    "600": ("嘉義市", "嘉義市"),
+    "648": ("西螺鎮", "雲林縣"),
+    "700": ("台南市場", "台南市"),
+    "800": ("高雄市", "高雄市"),
+    "830": ("鳳山區", "高雄市"),
+    "930": ("台東市", "台東縣"),
+    "950": ("花蓮市", "花蓮縣"),
 }
 
 # 會員 key 無效、或非會員要翻第 2 頁之後時，伺服器會回 RS=ERROR + MSG
@@ -105,7 +119,8 @@ class TwMoaSource(PriceSource):
 
     async def setup(self) -> None:
         """每次 ingest 前重置快取：市場清單與 api_key 有效性。"""
-        self._markets: dict[str, str] | None = None
+        # {代碼: (名稱, 縣市或 None)}
+        self._markets: dict[str, tuple[str, str | None]] | None = None
         self._key_works: bool | None = None
 
     # -- 市場 -------------------------------------------------------------
@@ -116,22 +131,45 @@ class TwMoaSource(PriceSource):
             RawMarket(
                 external_id=code,
                 name=name,
+                region=region,
                 timezone=self.manifest.timezone,
                 raw={"source": "data.moa.gov.tw"},
             )
-            for code, name in sorted(markets.items())
+            for code, (name, region) in sorted(markets.items())
         ]
 
-    async def _load_markets(self) -> dict[str, str]:
-        """回傳 {市場代碼: 名稱}。
+    async def _load_markets(self) -> dict[str, tuple[str, str | None]]:
+        """回傳 {市場代碼: (名稱, 縣市)}。
 
-        以內建代碼表當底，再從最近的交易資料補進新市場並更新名稱。
+        名稱以 API 實際回傳的為準，縣市一律取自內建對照表——
+        MOA 的價格 API 沒有縣市欄位，只能靠這份表補。
+
         結果會快取在 self._markets，整個 ingest 只發現一次。
         """
         if self._markets is not None:
             return self._markets
 
-        found: dict[str, str] = dict(_DEFAULT_MARKETS)
+        found: dict[str, tuple[str, str | None]] = dict(_DEFAULT_MARKETS)
+
+        def remember(row: dict) -> None:
+            code = str(row.get("MarketCode") or "").strip()
+            if not code:
+                return
+            name = str(row.get("MarketName") or "").strip()
+            known_name, region = found.get(code, (code, None))
+            if code not in _DEFAULT_MARKETS and code not in seen_unknown:
+                # 對照表沒有的代碼代表 MOA 新增了市場：它會沒有縣市，
+                # 而且在切片模式下本來很可能整個被漏掉，所以要叫出來
+                seen_unknown.add(code)
+                self.log.warning(
+                    "發現不在內建對照表中的市場代碼 %s（%s）：region 會是空的，"
+                    "請補進 _DEFAULT_MARKETS",
+                    code, name or "名稱不明",
+                )
+            found[code] = (name or known_name, region)
+
+        seen_unknown: set[str] = set()
+
         # 從今天往回找第一個有交易的日子；市場每日開市，一天就夠發現大部分市場
         for offset in range(10):
             probe = date.today() - timedelta(days=offset)
@@ -142,18 +180,14 @@ class TwMoaSource(PriceSource):
                 continue
             if rows:
                 for row in rows:
-                    code = str(row.get("MarketCode") or "").strip()
-                    name = str(row.get("MarketName") or "").strip()
-                    if code:
-                        found[code] = name or found.get(code, code)
-                # 蔬菜 / 水果 / 花卉切片可以看到更完整的市場分佈
+                    remember(row)
+                # 蔬菜 / 水果 / 花卉切片可以看到更完整的市場分佈。
+                # 注意：這些切片本身也可能被 1000 筆截斷，所以發現不完整是常態，
+                # 真正的權威清單是 _DEFAULT_MARKETS。
                 for ttype in _TCTYPES:
                     try:
                         for row in await self._query(probe, TcType=ttype):
-                            code = str(row.get("MarketCode") or "").strip()
-                            name = str(row.get("MarketName") or "").strip()
-                            if code:
-                                found[code] = name or found.get(code, code)
+                            remember(row)
                     except Exception:
                         self.log.warning(
                             "市場發現：TcType=%s 查詢失敗，忽略", ttype, exc_info=True
@@ -167,15 +201,17 @@ class TwMoaSource(PriceSource):
             unknown = wanted - set(found)
             if unknown:
                 self.log.warning(
-                    "組態指定的市場代碼不在發現結果中：%s（以代碼當名稱建立）",
+                    "組態指定的市場代碼不在對照表也沒被發現：%s（以代碼當名稱建立）",
                     sorted(unknown),
                 )
             for code in unknown:
-                found[code] = code
+                found[code] = (code, None)
             found = {code: found[code] for code in found if code in wanted}
 
         self._markets = found
-        self.log.info("市場清單：%s", found)
+        self.log.info(
+            "市場清單 %d 個：%s", len(found), {k: v[0] for k, v in sorted(found.items())}
+        )
         return found
 
     # -- 價格 -------------------------------------------------------------
