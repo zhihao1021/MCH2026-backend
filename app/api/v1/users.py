@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query, status
 
 from app.core.deps import ClientIp, CurrentUser, DbSession, Locale, OptionalUser, Paging
 from app.core.pagination import Page
@@ -22,10 +23,13 @@ from app.schemas.profile import (
     ProfileUpdate,
     PublicUserOut,
 )
+from app.schemas.favorite import FavoriteListOut, FavoriteOut
 from app.schemas.quote import QuoteOut
 from app.core.errors import AppError
 from app.data.countries import get_country, lookup_subdivision
 from app.services import geoip as geoip_service
+from app.services import catalog as catalog_service
+from app.services import favorites as favorite_service
 from app.services import profile as profile_service
 from app.services import quotes as quote_service
 
@@ -137,6 +141,70 @@ async def clear_my_location(user: CurrentUser, session: DbSession) -> UserOut:
     """清掉位置，但保留國家——幣別與電話格式都靠它。"""
     await profile_service.clear_location(session, user)
     return UserOut.from_model(user)
+
+
+# ---------------------------------------------------------------------------
+# 收藏作物
+# ---------------------------------------------------------------------------
+
+
+@router.get("/favorites", response_model=FavoriteListOut, summary="我收藏的作物")
+async def list_my_favorites(
+    user: CurrentUser,
+    session: DbSession,
+    locale: Locale,
+    country_code: Annotated[
+        str | None,
+        Query(description="用哪一國的市場算價格。省略則用個人檔案的國家"),
+    ] = None,
+) -> FavoriteListOut:
+    """收藏清單，**每個品項都附上最新官方價與漲跌**。
+
+    這是為了功能機設計的：首頁一次列出「我關心的作物今天多少錢」，
+    不要讓前端對每個收藏各打一次 `/products/{ref}/overview`。
+
+    不分頁——有數量上限，一次全給比較省往返。
+    """
+    items = await favorite_service.list_favorites(session, user, country_code=country_code)
+    return FavoriteListOut(
+        items=[FavoriteOut.from_item(i, locale) for i in items],
+        total=len(items),
+        limit=favorite_service.MAX_FAVORITES,
+        country_code=(country_code or user.country_code or "").upper() or None,
+    )
+
+
+@router.put("/favorites/{ref}", response_model=FavoriteOut, summary="加入收藏")
+async def add_favorite(
+    ref: str, user: CurrentUser, session: DbSession, locale: Locale
+) -> FavoriteOut:
+    """`ref` 可以是品項的 UUID 或 slug。
+
+    **冪等**：已經收藏過再打一次不會報錯，也不會變成兩筆，
+    所以前端不必先查有沒有收藏過。
+    """
+    product = await catalog_service.resolve_product(session, ref)
+    favorite = await favorite_service.add_favorite(session, user, product)
+    items = await favorite_service.list_favorites(session, user)
+    for item in items:
+        if item.product.id == product.id:
+            return FavoriteOut.from_item(item, locale)
+    # 理論上不會走到這裡；保底回一個沒有價格的結果
+    return FavoriteOut.from_item(
+        favorite_service.FavoriteItem(
+            product=product, favorited_at=favorite.created_at, latest=None
+        ),
+        locale,
+    )
+
+
+@router.delete(
+    "/favorites/{ref}", status_code=status.HTTP_204_NO_CONTENT, summary="取消收藏"
+)
+async def remove_favorite(ref: str, user: CurrentUser, session: DbSession) -> None:
+    """沒收藏過會回 404 `favorite_not_found`。"""
+    product = await catalog_service.resolve_product(session, ref)
+    await favorite_service.remove_favorite(session, user, product)
 
 
 @router.get("/quotes", response_model=Page[QuoteOut], summary="我的報價")

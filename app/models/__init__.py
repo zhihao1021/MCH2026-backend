@@ -16,6 +16,7 @@ from app.models.enums import (
     QuoteStatus,
     UserRole,
 )
+from app.models.favorite import ProductFavorite
 from app.models.price import IngestRun, OfficialPrice
 from app.models.quote import Quote
 from app.models.user import OtpCode, RefreshToken, User
@@ -30,6 +31,7 @@ __all__ = [
     "OtpCode",
     "OtpPurpose",
     "Product",
+    "ProductFavorite",
     "ProductCategory",
     "ProductName",
     "ProductSourceMapping",

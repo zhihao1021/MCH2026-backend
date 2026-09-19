@@ -160,6 +160,8 @@ users ── quotes ────────────────────
 | GET | `/me` / PATCH `/me` | 個人檔案（暱稱 / 商號 / 簡介 / 語系 / 幣別）。**不能改身分或位置** |
 | GET,PUT,DELETE | `/me/location` | 登記所在位置（含經緯度）。PUT 是整筆取代 |
 | POST | `/me/location/detect` | 「取得目前位置」按鈕。由 IP 推估，只回建議值不存檔 |
+| GET | `/me/favorites` | **收藏的作物**，含每個作物的最新價與漲跌 |
+| PUT,DELETE | `/me/favorites/{ref}` | 加入 / 取消收藏（PUT 冪等，`ref` 可用 slug） |
 | GET | `/me/quotes` | 我的報價（含已下架） |
 
 報價預設 48 小時後過期，排程每 10 分鐘把過期的轉成 `expired`。
@@ -238,6 +240,8 @@ Extension 不碰資料庫——只要 yield `RawPrice`，正規化、市場建�
 - `change_pct` 已經算好，不用自己抓兩天相減。
 - 品項名稱由後端依 `?locale=` 或 `Accept-Language` 解析好，直接顯示即可。
 - 價格是字串型態的 `Decimal`（避免浮點誤差），顯示前自行 parse。
+- **收藏清單用 `/me/favorites`**，它已附上每個作物的最新價與漲跌；
+  不要對每個收藏各打一次 `/overview`。
 - **定位按鈕不要用 `navigator.geolocation`**——Cloud Phone 不支援，會拿到機房座標。
   改打 `POST /v1/me/location/detect`，並把回應的 `notice` 顯示給使用者。
 

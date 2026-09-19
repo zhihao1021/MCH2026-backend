@@ -84,6 +84,8 @@ GET /healthz
 | 403 | `role_cannot_quote` | 身分不是小農 / 盤商，不能報價 |
 | 403 | `not_quote_owner` | 試圖修改 / 下架別人的報價 |
 | 403 | `admin_disabled` | 伺服器未設定管理 token，管理端點全停用 |
+| 404 | `favorite_not_found` | 取消收藏時該品項不在收藏中 |
+| 409 | `favorite_limit_reached` | 收藏數已達上限（`details.limit`） |
 | 404 | `product_not_found` / `market_not_found` / `quote_not_found` / `user_not_found` | 資源不存在 |
 | 409 | `quote_limit_reached` | 有效報價數已達上限 |
 | 409 | `quote_not_editable` | 已下架的報價不可修改 |
@@ -647,7 +649,101 @@ DELETE /v1/me/location
 國名與行政區名會依請求的語系解析；`GET /v1/me` 用的是**使用者自己的 `locale`**，
 所以 zh-Hant 的使用者看自己的美國地址會是「美國」而不是 "United States"。
 
-### 4.9 我的報價
+### 4.9 收藏作物 ⭐
+
+把常看的作物釘起來，首頁一次列出「我關心的作物今天多少錢」。
+
+```
+GET    /v1/me/favorites          列出收藏（含最新價與漲跌）
+PUT    /v1/me/favorites/{ref}    加入收藏
+DELETE /v1/me/favorites/{ref}    取消收藏
+```
+
+`{ref}` 可以是品項的 **UUID 或 slug**，兩者等效（`/me/favorites/cabbage`）。
+
+#### 列出
+
+```
+GET /v1/me/favorites
+```
+
+| 參數 | 型別 | 說明 |
+| --- | --- | --- |
+| `country_code` | string | 用哪一國的市場算價格。省略則用個人檔案的國家 |
+| `locale` | string | 品項名稱語系（見 2.3） |
+
+**不分頁**——有數量上限，一次全給比較省往返。依收藏時間新到舊排序。
+
+```json
+{
+  "items": [
+    {
+      "product": {
+        "id": "a1b2c3d4-…", "slug": "cabbage", "name": "高麗菜",
+        "category": "vegetable", "default_unit": "kg",
+        "image_url": "https://thumb.wikimedia.org/…"
+      },
+      "favorited_at": "2026-09-20T02:11:43Z",
+      "latest": {
+        "trade_date": "2026-09-19",
+        "price_avg": "21.16",
+        "currency": "TWD",
+        "unit": "kg",
+        "market_name": "三重區",
+        "market_count": 12,
+        "change_pct": -22.02
+      }
+    }
+  ],
+  "total": 4,
+  "limit": 30,
+  "country_code": "TW"
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `latest` | 近 14 天內的最新官方價。**可能是 `null`**——非產季、或該國還沒接資料源 |
+| `latest.price_avg` | 跨市場聚合值，**以交易量加權**（沒有量的退回算術平均），與走勢圖同一套規則 |
+| `latest.market_count` | 這個價格聚合了幾個市場；`market_name` 是其中一個的名字 |
+| `latest.change_pct` | 相對**前一個有資料的交易日**的漲跌幅（%）。只有一天資料時是 `null` |
+| `limit` | 收藏數量上限（目前 30） |
+| `country_code` | 這次用哪一國的市場算的 |
+
+> **這支就是為了功能機設計的。** 不要對每個收藏各打一次
+> `/products/{ref}/overview`——那是 N 次往返，在 4G 的遠端渲染下很有感。
+> 要看單一品項的完整走勢與報價時再打 overview。
+
+**價格為什麼要分國家**：烏干達的使用者看到台幣報價沒有意義，
+不同幣別混在同一張清單上也無法比較。所以預設只取使用者自己國家的市場，
+查不到就回 `latest: null`，而不是硬給一個別國的價格。
+
+#### 加入
+
+```
+PUT /v1/me/favorites/{ref}
+```
+
+**冪等**：已經收藏過再打一次不會報錯，也不會變成兩筆，
+所以前端不必先查有沒有收藏過，直接 PUT 即可。
+
+回一個 `FavoriteOut`（形狀同上面 `items` 的元素），含最新價，
+所以加入後可以直接更新畫面不用重新拉清單。
+
+| HTTP | code | 說明 |
+| --- | --- | --- |
+| 404 | `product_not_found` | 沒有這個品項 |
+| 409 | `favorite_limit_reached` | 已達上限，`details.limit` 是上限值 |
+
+#### 取消
+
+```
+DELETE /v1/me/favorites/{ref}
+```
+
+成功回 **204 No Content**。沒收藏過回 404 `favorite_not_found`。
+
+### 4.10 我的報價
 
 ```
 GET /v1/me/quotes
@@ -1413,10 +1509,13 @@ GET /v1/sources/{key}
     詳情頁在圖片下放一行「圖片：{source} / {author}（{license}）」即可，
     能連到 `source_url` 更好。清單的縮圖可統一在「關於」頁標示。
     這不是建議，是授權條件（見 2.5）。
-13. **定位按鈕不要用 `navigator.geolocation`**：Cloud Phone 不支援，
+13. **收藏清單用 `/me/favorites` 一次拿**：它已經附上每個作物的最新價與漲跌，
+    不要對每個收藏各打一次 `/overview`。加入收藏是冪等的 PUT，
+    前端不必先查狀態；`latest` 為 `null` 時顯示「暫無行情」即可。
+14. **定位按鈕不要用 `navigator.geolocation`**：Cloud Phone 不支援，
     會拿到機房座標。改打 `POST /v1/me/location/detect`（4.4），
     把回來的值填進表單讓使用者確認，並把 `notice` 顯示出來。
     三種錯誤（`geoip_*`）都只要退回手動輸入，不要擋住流程。
-14. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
+15. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
     後端已經算好。身分註冊後不能改，所以這個值在整個 session 內是穩定的，
     可以安心快取。選錯身分的使用者請導向客服，不要在 App 裡提供切換。
