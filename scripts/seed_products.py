@@ -4,6 +4,18 @@
 
 可重複執行：已存在的 slug 會跳過，只補上缺少的名稱與別名。
 
+## 收錄範圍
+
+**只收農作物**：蔬菜、水果、花卉、穀物。
+
+畜產（雞蛋、肉品）與漁產不在這個 App 的範圍內——它們的產銷結構與
+交易單位跟作物差很多（計價單位、分級、交易所），硬塞進同一套品項模型
+只會讓對照與單位換算變得沒辦法維護。`ProductCategory` 仍保留
+`livestock` / `fishery` 兩個值，將來真的要做時不必改 schema。
+
+花卉留著：它是園藝作物，也在 MOA 的農產品交易行情裡，
+`popularity` 壓低避免洗版即可。
+
 ## 命名原則
 
 - `zh-Hant` 的主要名稱用一般人講的說法（高麗菜），別名放官方/學名/俗名
@@ -39,7 +51,6 @@ V = ProductCategory.VEGETABLE
 F = ProductCategory.FRUIT
 L = ProductCategory.FLOWER
 G = ProductCategory.GRAIN
-A = ProductCategory.LIVESTOCK
 
 # (slug, 分類, 單位, 熱門度, [(locale, 名稱, 是否為主要名稱)])
 SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] = [
@@ -116,10 +127,6 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ("rice", G, "kg", 94, [
         ("zh-Hant", "白米", True), ("zh-Hant", "稻米", False),
         ("ja", "米", True), ("en", "Rice", True),
-    ]),
-    ("egg", A, "kg", 96, [
-        ("zh-Hant", "雞蛋", True), ("zh-Hant", "蛋", False),
-        ("ja", "鶏卵", True), ("en", "Chicken Egg", True),
     ]),
 
     # =======================================================================
