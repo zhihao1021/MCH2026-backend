@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -93,6 +94,8 @@ async def create_quote(
         quantity=quantity,
         min_order=min_order,
         country_code=user.country_code,
+        # ISO 代碼是篩選用的穩定鍵；region 只是顯示字串
+        subdivision_code=user.subdivision_code,
         # 沒指定就沿用個人檔案的所在地（行政區名優先，其次自由輸入的城鎮）
         region=region or _user_region(user),
         location_text=location_text,
@@ -126,6 +129,7 @@ async def list_quotes(
     side: QuoteSide | None = None,
     role: UserRole | None = None,
     country_code: str | None = None,
+    subdivision_code: str | None = None,
     region: str | None = None,
     market_id: uuid.UUID | None = None,
     status: QuoteStatus | None = QuoteStatus.ACTIVE,
@@ -151,8 +155,13 @@ async def list_quotes(
     scope = country_scope.condition(Quote.country_code)
     if scope is not None:
         conditions.append(scope)
+    if subdivision_code:
+        conditions.append(Quote.subdivision_code == subdivision_code.upper())
     if region:
-        conditions.append(Quote.region == region)
+        # region 是顯示字串，不同來源寫法不一致（臺北市 / 台北市），
+        # 所以做寬鬆比對而不是等值——不然使用者選了地區卻一筆都查不到。
+        # 要精確請改用 subdivision_code。
+        conditions.append(Quote.region.op("~*")(_region_regex(region)))
     if market_id is not None:
         conditions.append(Quote.market_id == market_id)
     if status is not None:
@@ -285,3 +294,52 @@ def _user_region(user: User) -> str | None:
     if sub is not None:
         return sub.display_name(user.locale)
     return user.locality
+
+
+async def list_quote_regions(
+    session: AsyncSession, *, country_code: str | None = None
+) -> list[tuple[str | None, str | None, str, int]]:
+    """實際有有效報價的地區，含 ISO 代碼與筆數。
+
+    給前端做地區選單。用這個而不是 `/markets/regions`：市場的地區與報價的
+    地區來自不同來源，字面不一定相同，拿市場的清單去篩報價會查不到東西。
+    """
+    stmt = (
+        select(
+            Quote.region,
+            Quote.subdivision_code,
+            Quote.country_code,
+            func.count().label("n"),
+        )
+        .where(
+            Quote.status == QuoteStatus.ACTIVE,
+            or_(Quote.valid_until.is_(None), Quote.valid_until > datetime.now(UTC)),
+        )
+        .group_by(Quote.region, Quote.subdivision_code, Quote.country_code)
+        .order_by(Quote.country_code, func.count().desc())
+    )
+    if country_code:
+        stmt = stmt.where(Quote.country_code == country_code.upper())
+    stmt = country_scope.apply(stmt, Quote.country_code)
+    return [(r, sub, cc, n) for r, sub, cc, n in (await session.execute(stmt)).all()]
+
+
+# 同一個地名的常見異體字。只做顯示層的寬鬆比對，精確篩選請用 subdivision_code。
+_REGION_VARIANTS = {"臺": "台", "台": "臺"}
+
+
+def _region_regex(region: str) -> str:
+    """把地名轉成 PostgreSQL 正規表達式，吸收臺／台這類異體字。
+
+    `臺北市` 與 `台北市` 是同一個地方，但分別來自 ISO 行政區名與資料源
+    自訂名稱，字面不相等。
+
+    用正規表達式（`~*`）而不是 ILIKE：PostgreSQL 的 LIKE **不支援
+    `[...]` 字元類別**，寫成 ILIKE 會變成比對字面的中括號，一筆都不中。
+    """
+    out = ["^"]
+    for ch in region.strip():
+        alt = _REGION_VARIANTS.get(ch)
+        out.append(f"[{ch}{alt}]" if alt else re.escape(ch))
+    out.append("$")
+    return "".join(out)

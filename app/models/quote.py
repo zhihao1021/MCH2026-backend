@@ -70,6 +70,10 @@ class Quote(Base, TimestampMixin):
     min_order: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
 
     country_code: Mapped[str] = mapped_column(String(2), nullable=False)
+    # ISO 3166-2，例如 TW-TPE。**篩選請用這個欄位**——
+    # region 是給人看的顯示字串，不同來源寫法不一致（臺北市 / 台北市），
+    # 拿來比對會漏掉大半資料。
+    subdivision_code: Mapped[str | None] = mapped_column(String(8), index=True)
     region: Mapped[str | None] = mapped_column(String(80), index=True)
     location_text: Mapped[str | None] = mapped_column(String(160))
     latitude: Mapped[float | None] = mapped_column(Float)

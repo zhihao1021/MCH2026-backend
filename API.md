@@ -1253,13 +1253,36 @@ GET /v1/quotes
 | `side` | string | `sell`（我要賣）/ `buy`（我要收） |
 | `role` | string | 只看小農 `farmer` 或盤商 `trader` |
 | `country_code` | string | 國碼篩選 |
+| `subdivision_code` | string | **精確篩選用這個**：ISO 3166-2，例如 `TW-TPE`。清單見 8.2 |
 | `region` | string | 地區篩選 |
 | `market_id` | UUID | 只看指定市場的報價 |
 | `limit` / `offset` | int | 分頁 |
 
 排序：最新建立的在前。
 
-### 8.2 新增報價（需登入，身分為 farmer / trader）
+### 8.2 有報價的地區 ⭐
+
+```
+GET /v1/quotes/regions?country_code=TW
+```
+
+地區選單請用這支，回的每個值都保證**至少有一筆有效報價**。
+
+```json
+[
+  { "region": "高雄市", "subdivision_code": "TW-KHH", "country_code": "TW", "quote_count": 17 },
+  { "region": "宜蘭縣", "subdivision_code": "TW-ILA", "country_code": "TW", "quote_count": 17 }
+]
+```
+
+> **不要用 `/markets/regions` 來篩報價。** 那是**市場**的地區，與報價的地區
+> 來自不同來源，字面不保證相同——`/markets/regions` 會給你 `台北市`，
+> 但報價可能存成 `臺北市`，用等值比對會一筆都查不到。
+
+**篩選時優先用 `subdivision_code`。** `region` 是給人看的顯示字串，
+後端雖然做了寬鬆比對（吸收臺／台這類異體字），但 ISO 代碼才是穩定的鍵。
+
+### 8.3 新增報價（需登入，身分為 farmer / trader）
 
 ```
 POST /v1/quotes
@@ -1307,7 +1330,7 @@ POST /v1/quotes
 - 有效報價數有上限（預設 50 筆），超過 409 `quote_limit_reached`
 - 品項不存在或已停用 → 404 `product_not_found`
 
-### 8.3 單筆報價（公開）
+### 8.4 單筆報價（公開）
 
 ```
 GET /v1/quotes/{quote_id}
@@ -1315,7 +1338,7 @@ GET /v1/quotes/{quote_id}
 
 **回應**：`QuoteOut`。
 
-### 8.4 修改報價（需登入，僅限本人）
+### 8.5 修改報價（需登入，僅限本人）
 
 ```
 PATCH /v1/quotes/{quote_id}
@@ -1333,7 +1356,7 @@ PATCH /v1/quotes/{quote_id}
 已下架（`withdrawn` / `hidden`）的報價不可修改 → 409 `quote_not_editable`。
 非本人 → 403 `not_quote_owner`。
 
-### 8.5 `QuoteOut` 形狀
+### 8.6 `QuoteOut` 形狀
 
 ```json
 {
@@ -1373,7 +1396,7 @@ PATCH /v1/quotes/{quote_id}
 | `seller.phone_is_masked` | 目前電話是否被遮罩 |
 | `valid_until` | 過期時間；`null` = 永不過期 |
 
-### 8.6 下架報價（需登入，僅限本人）
+### 8.7 下架報價（需登入，僅限本人）
 
 ```
 DELETE /v1/quotes/{quote_id}

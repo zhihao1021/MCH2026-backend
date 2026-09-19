@@ -81,6 +81,8 @@ class QuoteOut(BaseModel):
     quantity: Decimal | None = None
     min_order: Decimal | None = None
     country_code: str
+    # ISO 3166-2。前端要篩選請用這個，不要用 region 字串
+    subdivision_code: str | None = None
     region: str | None = None
     location_text: str | None = None
     market_id: uuid.UUID | None = None
@@ -110,6 +112,7 @@ class QuoteOut(BaseModel):
             quantity=quote.quantity,
             min_order=quote.min_order,
             country_code=quote.country_code,
+            subdivision_code=quote.subdivision_code,
             region=quote.region,
             location_text=quote.location_text,
             market_id=quote.market_id,
@@ -126,3 +129,16 @@ class QuoteOut(BaseModel):
             created_at=quote.created_at,
             valid_until=quote.valid_until,
         )
+
+
+class QuoteRegionOut(BaseModel):
+    """實際有報價的地區。
+
+    前端的地區選單請用這支，不要用 `/markets/regions`——
+    那是市場的地區，與報價的地區是不同的命名空間，選了會查不到東西。
+    """
+
+    region: str | None = None
+    subdivision_code: str | None = None
+    country_code: str
+    quote_count: int

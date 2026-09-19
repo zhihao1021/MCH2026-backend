@@ -10,7 +10,7 @@ from fastapi import APIRouter, Query, status
 from app.core.deps import CurrentUser, DbSession, Locale, OptionalUser, Paging, QuoterUser
 from app.core.pagination import Page
 from app.models.enums import QuoteSide, QuoteStatus, UserRole
-from app.schemas.quote import QuoteCreate, QuoteOut, QuoteUpdate
+from app.schemas.quote import QuoteCreate, QuoteOut, QuoteRegionOut, QuoteUpdate
 from app.services import quotes as quote_service
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
@@ -26,7 +26,13 @@ async def list_quotes(
     side: Annotated[QuoteSide | None, Query(description="sell=我要賣, buy=我要收")] = None,
     role: Annotated[UserRole | None, Query(description="只看小農或只看盤商")] = None,
     country_code: Annotated[str | None, Query()] = None,
-    region: Annotated[str | None, Query()] = None,
+    subdivision_code: Annotated[
+        str | None, Query(description="ISO 3166-2，例如 TW-TPE。**精確篩選請用這個**")
+    ] = None,
+    region: Annotated[
+        str | None,
+        Query(description="地區顯示名。寬鬆比對（吸收臺／台），精確請改用 subdivision_code"),
+    ] = None,
     market_id: Annotated[uuid.UUID | None, Query()] = None,
 ) -> Page[QuoteOut]:
     items, total = await quote_service.list_quotes(
@@ -36,6 +42,7 @@ async def list_quotes(
         side=side,
         role=role,
         country_code=country_code,
+        subdivision_code=subdivision_code,
         region=region,
         market_id=market_id,
         status=QuoteStatus.ACTIVE,
@@ -46,6 +53,25 @@ async def list_quotes(
     )
 
 
+@router.get("/regions", response_model=list[QuoteRegionOut], summary="有報價的地區")
+async def list_quote_regions(
+    session: DbSession,
+    country_code: Annotated[str | None, Query()] = None,
+) -> list[QuoteRegionOut]:
+    """地區選單請用這支。
+
+    **不要用 `/markets/regions`**：那是市場的地區，與報價的地區來自不同來源，
+    字面不一定相同（`台北市` vs `臺北市`），拿去篩報價會查不到東西。
+    這裡回的每個值都保證至少有一筆有效報價。
+    """
+    rows = await quote_service.list_quote_regions(session, country_code=country_code)
+    return [
+        QuoteRegionOut(region=r, subdivision_code=sub, country_code=cc, quote_count=n)
+        for r, sub, cc, n in rows
+    ]
+
+
+# 這條要放在 /{quote_id} 之前，否則 "regions" 會先被當成 UUID 解析
 @router.post("", response_model=QuoteOut, status_code=status.HTTP_201_CREATED, summary="新增報價")
 async def create_quote(
     payload: QuoteCreate,

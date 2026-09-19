@@ -277,6 +277,7 @@ async def seed(
                         quantity=Decimal(random.randrange(50, 5000)),
                         min_order=Decimal(random.choice([0, 10, 20, 50, 100])) or None,
                         country_code=cc,
+                        subdivision_code=REGION_TO_ISO.get(region_info.region),
                         region=region_info.region,
                         contact_phone_public=user.contact_phone_public,
                         valid_from=now,
