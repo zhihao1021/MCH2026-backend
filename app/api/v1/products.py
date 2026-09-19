@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -32,9 +33,30 @@ async def search_products(
     locale: Locale,
     q: Annotated[str | None, Query(description="關鍵字，比對各語系名稱與別名")] = None,
     category: Annotated[ProductCategory | None, Query(description="分類")] = None,
+    region: Annotated[
+        str | None,
+        Query(description="只回在該地區有官方行情的作物。清單見 /markets/regions"),
+    ] = None,
+    country_code: Annotated[
+        str | None, Query(description="只回在該國有官方行情的作物（ISO 3166-1 alpha-2）")
+    ] = None,
+    market_id: Annotated[
+        uuid.UUID | None, Query(description="只回該市場有官方行情的作物")
+    ] = None,
 ) -> Page[ProductOut]:
+    """`region` / `country_code` / `market_id` 會濾掉在該地沒有任何官方行情的作物。
+
+    三者交集。地區名稱可能跨國撞名，需要精確結果請一併帶 `country_code`。
+    """
     items, total = await catalog_service.search_products(
-        session, params=paging, q=q, category=category, locale=locale
+        session,
+        params=paging,
+        q=q,
+        category=category,
+        locale=locale,
+        region=region,
+        country_code=country_code,
+        market_id=market_id,
     )
     return Page.build([ProductOut.from_model(p, locale) for p in items], total, paging)
 

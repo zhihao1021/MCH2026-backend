@@ -135,7 +135,7 @@ users ── quotes ────────────────────
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| GET | `/products` | 搜尋品項，`q` 比對所有語系名稱與別名 |
+| GET | `/products` | 搜尋品項。`q` 比對所有語系名稱與別名；`region` / `country_code` / `market_id` 只回在該地有官方行情的作物 |
 | GET | `/products/{ref}` | 品項詳情（`ref` 可以是 UUID 或 slug） |
 | GET | `/products/{ref}/overview` | **詳情頁一次拿齊**：官方價 + 走勢 + 報價摘要 |
 | GET | `/products/{ref}/prices/official` | 各市場最新官方價 |

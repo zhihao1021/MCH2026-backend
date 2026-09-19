@@ -910,10 +910,40 @@ GET /v1/products
 | --- | --- | --- |
 | `q` | string | 關鍵字，比對**所有語系**的名稱與別名（例如 `q=高麗菜`、`q=甘藍`、`q=cabbage` 都能找到同一個品項） |
 | `category` | string | 分類：`vegetable` / `fruit` / `flower` / `grain` / `livestock` / `fishery` / `other` |
+| `region` | string | **只回在該地區有官方行情的作物**。可用的值見 7.9 |
+| `country_code` | string | **只回在該國有官方行情的作物**（ISO 3166-1 alpha-2） |
+| `market_id` | UUID | **只回該市場有官方行情的作物** |
 | `locale` | string | 回應名稱的語系（見 2.3） |
 | `limit` / `offset` | int | 分頁（見 2.2） |
 
 排序：`popularity` 高的在前。
+
+#### 依產地過濾 ⭐
+
+`region` / `country_code` / `market_id` 會把結果限縮成
+**「在該地確實有官方行情的作物」**——完全沒有資料的品項直接不回傳，
+不會出現點進去一片空白的品項。
+
+```
+GET /v1/products?country_code=UG          → 23 項（烏干達有行情的）
+GET /v1/products?region=Iganga            → 23 項
+GET /v1/products?region=台中市&locale=zh-Hant → 129 項
+GET /v1/products?country_code=UG&q=bean   → 2 項（Common Bean、Soybean）
+GET /v1/products?country_code=UG&category=fruit → 5 項
+```
+
+三個條件**互相交集**，也可以跟 `q` / `category` 一起用。
+
+兩個要注意的地方：
+
+1. **地區名稱可能跨國撞名**（所以 `/markets/regions` 才會一併回國碼）。
+   只給 `region` 會跨國比對，要精確請同時帶 `country_code`。
+2. **「有市場」不等於「有資料」。** 市場可能已經建立但還沒抓到任何行情，
+   這時該地區會回 0 項。例如烏干達目前 9 個市場裡只有 Iganga 有資料，
+   所以 `region=Mbale` 是空的——這是符合預期的行為，不是 bug。
+
+判斷依據是「**有沒有任何一筆官方行情**」，不限時間。
+如果需要「近 N 天內有行情」才算，要另外加參數（目前沒有）。
 
 **回應**：`Page<ProductOut>`
 

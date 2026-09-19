@@ -14,6 +14,7 @@ from app.core import country_scope
 from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import PageParams
 from app.models.catalog import DataSource, Market, Product, ProductName, ProductSourceMapping
+from app.models.price import OfficialPrice
 from app.models.enums import ProductCategory
 
 
@@ -24,12 +25,22 @@ async def search_products(
     q: str | None = None,
     category: ProductCategory | None = None,
     locale: str | None = None,
+    region: str | None = None,
+    country_code: str | None = None,
+    market_id: uuid.UUID | None = None,
     include_inactive: bool = False,
 ) -> tuple[list[Product], int]:
     """依關鍵字搜尋品項。
 
     比對範圍是 product_names 的所有語系與別名，因此「高麗菜」「甘藍」
     「cabbage」都找得到同一個品項。
+
+    `region` / `country_code` / `market_id` 會把結果限縮成「在該地確實有
+    官方行情的作物」——完全沒有資料的品項直接不回傳。這三個條件會互相
+    交集，可以組合使用。
+
+    地區名稱在不同國家可能撞名（所以 `/markets/regions` 才會一併回國碼），
+    只給 `region` 時會跨國比對，需要精確結果請同時帶 `country_code`。
     """
     stmt: Select = select(Product).options(selectinload(Product.names))
     count_stmt = select(func.count(func.distinct(Product.id))).select_from(Product)
@@ -55,6 +66,26 @@ async def search_products(
             cond = or_(Product.id.in_(name_match), Product.slug.ilike(f"%{term}%"))
             stmt = stmt.where(cond)
             count_stmt = count_stmt.where(cond)
+
+    # 依產地過濾：只留在指定範圍內有官方行情的品項
+    if region or country_code or market_id is not None:
+        located = (
+            select(OfficialPrice.product_id)
+            .join(Market, Market.id == OfficialPrice.market_id)
+            .where(OfficialPrice.product_id.is_not(None))
+        )
+        if region:
+            located = located.where(Market.region == region)
+        if country_code:
+            located = located.where(Market.country_code == country_code.upper())
+        if market_id is not None:
+            located = located.where(OfficialPrice.market_id == market_id)
+        # 這裡也要套 Demo 範圍，否則可以用 country_code 繞過被藏起來的國家
+        located = country_scope.apply(located, Market.country_code)
+
+        cond = Product.id.in_(located)
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
 
     stmt = stmt.order_by(Product.popularity.desc(), Product.slug).limit(params.limit).offset(
         params.offset
