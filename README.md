@@ -158,7 +158,8 @@ users ── quotes ────────────────────
 | PATCH | `/quotes/{id}` | 修改自己的報價 |
 | DELETE | `/quotes/{id}` | 下架（軟刪除，狀態轉 `withdrawn`） |
 | GET | `/me` / PATCH `/me` | 個人檔案（暱稱 / 商號 / 簡介 / 語系 / 幣別）。**不能改身分或位置** |
-| GET,PUT,DELETE | `/me/location` | 登記所在位置。PUT 是整筆取代 |
+| GET,PUT,DELETE | `/me/location` | 登記所在位置（含經緯度）。PUT 是整筆取代 |
+| POST | `/me/location/detect` | 「取得目前位置」按鈕。由 IP 推估，只回建議值不存檔 |
 | GET | `/me/quotes` | 我的報價（含已下架） |
 
 報價預設 48 小時後過期，排程每 10 分鐘把過期的轉成 `expired`。
@@ -221,6 +222,8 @@ Extension 不碰資料庫——只要 yield `RawPrice`，正規化、市場建�
 - `change_pct` 已經算好，不用自己抓兩天相減。
 - 品項名稱由後端依 `?locale=` 或 `Accept-Language` 解析好，直接顯示即可。
 - 價格是字串型態的 `Decimal`（避免浮點誤差），顯示前自行 parse。
+- **定位按鈕不要用 `navigator.geolocation`**——Cloud Phone 不支援，會拿到機房座標。
+  改打 `POST /v1/me/location/detect`，並把回應的 `notice` 顯示給使用者。
 
 ---
 
@@ -294,6 +297,29 @@ curl -X POST localhost:8000/v1/auth/otp/verify -H "Content-Type: application/jso
 
 `dev_login.py` 省略 `--phone` 時會隨機產生號碼，所以連續跑不會撞到前兩項。
 另外每次索取新碼都會把同號碼的舊碼作廢，別拿上一封的號碼去驗。
+
+### 使用者位置與「定位」按鈕
+
+`PUT /v1/me/location` 可以存座標（`latitude` / `longitude`）與行政區。
+另外有一支 `POST /v1/me/location/detect` 給「取得目前位置」按鈕用。
+
+**Cloud Phone 不支援 Geolocation API。** 前端是遠端渲染的瀏覽器，官方文件把
+positioning 明列為不支援，就算能呼叫也只會拿到 CloudMosa 機房的座標。
+官方建議改用 IP 反查，而使用者真實 IP 在 `X-Forwarded-For`（`client_ip()` 已在讀）。
+
+```dotenv
+GEOIP_PROVIDER=ip_api    # none = 關閉，端點回 501，使用者仍可手動輸入
+GEOIP_TIMEOUT=8
+```
+
+`detect` **不會存檔**，只回建議值讓使用者確認後再 `PUT`。精度是城市級的，
+誤差常達數十公里，所以回應帶一個 `notice` 字串請前端直接顯示，
+免得使用者誤以為是 GPS。
+
+> **隱私取捨**：ip-api.com 免金鑰但只有 HTTP，使用者 IP 會明文送給第三方。
+> 不接受就設 `GEOIP_PROVIDER=none`。要換供應商的話，
+> 實作 `app/services/geoip.py` 的 `GeoIpProvider` 再註冊進 `_PROVIDERS` 即可
+> （與 `sms.py` 同一個模式）。自架 MaxMind GeoLite2 可以完全避免外送 IP。
 
 ### 品項圖片
 

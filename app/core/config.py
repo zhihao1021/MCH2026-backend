@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     quote_default_ttl_hours: int = 48
     quote_max_active_per_user: int = 50
 
+    # ---- IP 反查位置 ----
+    # Cloud Phone 不支援 Geolocation API，所以「取得目前位置」只能靠
+    # X-Forwarded-For 裡的真實 IP 反查。結果是城市級的推估，僅供建議。
+    # none = 關閉（偵測端點回 501，使用者仍可手動輸入座標）
+    # ip_api = ip-api.com，免金鑰但只有 HTTP，IP 會明文送給第三方
+    geoip_provider: Literal["none", "ip_api"] = "ip_api"
+    geoip_timeout: float = 8.0
+
     # ---- Extension ----
     extensions_dir: Path = BASE_DIR / "app" / "extensions"
     # 留空 = 載入目錄下所有 extension；填了就只載入清單內的

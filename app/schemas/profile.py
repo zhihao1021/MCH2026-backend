@@ -176,6 +176,33 @@ class LocationIn(BaseModel):
         return self
 
 
+class LocationSuggestionOut(BaseModel):
+    """「取得目前位置」的結果。
+
+    這是**推估值不是量測值**：Cloud Phone 不支援 Geolocation API，
+    所以位置是由使用者 IP（`X-Forwarded-For`）反查來的，精度只到城市級，
+    在行動網路上常常指到電信商的出口機房。
+
+    後端**不會**直接存起來。前端應該把這些值填進表單讓使用者確認 / 調整，
+    再送 `PUT /v1/me/location`。
+    """
+
+    country_code: str | None = None
+    country_name: str | None = None
+    subdivision_code: str | None = None
+    subdivision_name: str | None = None
+    locality: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    timezone: str | None = None
+    # 反查的來源，例如 ip_api
+    provider: str
+    # 一律是 "ip"，保留欄位是為了將來若有裝置真的能給 GPS 可以區分
+    method: str = "ip"
+    # 給前端直接顯示的提醒，不要讓使用者誤以為這是 GPS 定位
+    notice: str = "這是依照連線 IP 推估的大概位置，可能有數十公里誤差，請確認後再儲存。"
+
+
 class LocationOut(BaseModel):
     """本人視角，完整資料。"""
 

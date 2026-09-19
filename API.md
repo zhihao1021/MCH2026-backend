@@ -77,6 +77,9 @@ GET /healthz
 | 401 | `refresh_token_reused` | refresh token 重複使用（已作廢全部登入狀態） |
 | 401 | `account_disabled` | 帳號停用 |
 | 401 | `invalid_admin_token` | 管理端點 token 錯誤 |
+| 400 | `geoip_no_public_ip` | 定位：拿不到對外 IP（本機 / 內網），退回手動輸入 |
+| 404 | `geoip_not_found` | 定位：反查服務查不到這個 IP |
+| 501 | `geoip_disabled` | 定位：伺服器關閉了 IP 位置推估 |
 | 400 | `role_required` | 註冊時未指定身分。**驗證碼不會被消耗**，補上 `role` 重試即可 |
 | 403 | `role_cannot_quote` | 身分不是小農 / 盤商，不能報價 |
 | 403 | `not_quote_owner` | 試圖修改 / 下架別人的報價 |
@@ -485,7 +488,71 @@ GET /v1/me/location
 回 `LocationOut`。**本人視角一律是完整資料**，不受 `visibility` 影響——
 否則使用者沒辦法確認自己到底填了什麼。
 
-### 4.4 登記 / 更新位置 ⭐
+### 4.4 取得目前位置（「定位」按鈕）⭐
+
+```
+POST /v1/me/location/detect
+```
+
+給「取得目前位置」按鈕用。**不會存檔**，只回建議值——
+拿到後填進位置表單讓使用者確認 / 微調，再送 `PUT /v1/me/location`（4.5）。
+
+> **為什麼不用瀏覽器的 `navigator.geolocation`**
+>
+> 前端跑在 Cloud Phone 上，那是**遠端渲染**的瀏覽器：頁面在 CloudMosa 的
+> 機房執行，只把畫面串流到手機。官方文件把 Geolocation 明列為不支援
+> （*"Cloud Phone does not offer access to device hardware for local
+> connectivity or positioning"*），就算能呼叫，拿到的也會是機房座標。
+>
+> 官方建議的替代做法就是 IP 反查，而使用者的**真實 IP 會放在
+> `X-Forwarded-For`**（連線本身的 remote address 是 CloudMosa 機房）。
+> 這支端點就是這樣做的。
+
+**回應**（`LocationSuggestionOut`）：
+
+```json
+{
+  "country_code": "TW",
+  "country_name": "臺灣",
+  "subdivision_code": "TW-TPE",
+  "subdivision_name": "臺北市",
+  "locality": "Taipei",
+  "latitude": 25.053,
+  "longitude": 121.5259,
+  "timezone": "Asia/Taipei",
+  "provider": "ip_api",
+  "method": "ip",
+  "notice": "這是依照連線 IP 推估的大概位置，可能有數十公里誤差，請確認後再儲存。"
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `subdivision_code` | 對得到我們收錄的 ISO 3166-2 時才有值，可直接送進 `PUT /v1/me/location` |
+| `subdivision_name` | 已依 `locale` 在地化（臺北市 / Taipei） |
+| `locality` | 城市名，來源給什麼就是什麼，多半是英文 |
+| `provider` | 反查來源，例如 `ip_api` |
+| `method` | 目前恆為 `ip` |
+| `notice` | **請直接顯示給使用者**，避免誤以為是 GPS 定位 |
+
+除了 `provider` / `method` / `notice`，其餘欄位都可能是 `null`。
+
+**精度警告**：IP 反查是城市級的，誤差常達數十公里；行動網路上更常直接
+指到電信商的出口機房。所以這支只能當「幫你少打幾個字」，
+不能當定位用。UI 上請務必讓使用者能修改。
+
+**可能的錯誤**：
+
+| HTTP | code | 說明 |
+| --- | --- | --- |
+| 400 | `geoip_no_public_ip` | 拿不到對外 IP（本機 / 內網連線）。開發環境常見 |
+| 404 | `geoip_not_found` | 反查服務查不到這個 IP |
+| 501 | `geoip_disabled` | 伺服器設定 `GEOIP_PROVIDER=none`，功能關閉 |
+
+**這三種錯誤都不該擋住使用者** —— 一律退回「手動輸入」即可，
+位置本來就不是必填。
+
+### 4.5 登記 / 更新位置 ⭐
 
 ```
 PUT /v1/me/location
@@ -535,7 +602,7 @@ PUT /v1/me/location
 | 只傳了 `latitude` 或只傳了 `longitude` | 「必須成對提供」 |
 | `timezone` 不是有效的 IANA 時區 | 「不是有效的 IANA 時區」 |
 
-### 4.5 清除位置
+### 4.6 清除位置
 
 ```
 DELETE /v1/me/location
@@ -544,7 +611,7 @@ DELETE /v1/me/location
 清掉行政區、地址、郵遞區號與座標，**但保留 `country_code`**——
 幣別與電話格式都靠它。回應為更新後的 `user` 物件。
 
-### 4.6 位置的公開程度 ⚠️
+### 4.7 位置的公開程度 ⚠️
 
 `visibility` 決定**別人**看到多少。預設是 `region`，刻意保守。
 
@@ -557,7 +624,7 @@ DELETE /v1/me/location
 
 `private` 時 `formatted` 只會有國名。
 
-### 4.7 `formatted` 地址
+### 4.8 `formatted` 地址
 
 後端會依國家組好單行地址，前端**不要自己拼**：
 
@@ -569,7 +636,7 @@ DELETE /v1/me/location
 國名與行政區名會依請求的語系解析；`GET /v1/me` 用的是**使用者自己的 `locale`**，
 所以 zh-Hant 的使用者看自己的美國地址會是「美國」而不是 "United States"。
 
-### 4.8 我的報價
+### 4.9 我的報價
 
 ```
 GET /v1/me/quotes
@@ -1298,6 +1365,11 @@ GET /v1/sources/{key}
     詳情頁在圖片下放一行「圖片：{source} / {author}（{license}）」即可，
     能連到 `source_url` 更好。清單的縮圖可統一在「關於」頁標示。
     這不是建議，是授權條件（見 2.5）。
-13. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
+13. **定位按鈕不要用 `navigator.geolocation`**：Cloud Phone 不支援，
+    會拿到機房座標。改打 `POST /v1/me/location/detect`（4.4），
+    把回來的值填進表單讓使用者確認，並把 `notice` 顯示出來。
+    三種錯誤（`geoip_*`）都只要退回手動輸入，不要擋住流程。
+
+14. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
     後端已經算好。身分註冊後不能改，所以這個值在整個 session 內是穩定的，
     可以安心快取。選錯身分的使用者請導向客服，不要在 App 裡提供切換。

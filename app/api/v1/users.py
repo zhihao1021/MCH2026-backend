@@ -12,16 +12,20 @@ import uuid
 
 from fastapi import APIRouter
 
-from app.core.deps import CurrentUser, DbSession, Locale, OptionalUser, Paging
+from app.core.deps import ClientIp, CurrentUser, DbSession, Locale, OptionalUser, Paging
 from app.core.pagination import Page
 from app.schemas.auth import UserOut
 from app.schemas.profile import (
     LocationIn,
     LocationOut,
+    LocationSuggestionOut,
     ProfileUpdate,
     PublicUserOut,
 )
 from app.schemas.quote import QuoteOut
+from app.core.errors import AppError
+from app.data.countries import get_country, lookup_subdivision
+from app.services import geoip as geoip_service
 from app.services import profile as profile_service
 from app.services import quotes as quote_service
 
@@ -54,6 +58,62 @@ async def update_me(payload: ProfileUpdate, user: CurrentUser, session: DbSessio
 @router.get("/location", response_model=LocationOut, summary="取得自己的位置")
 async def get_my_location(user: CurrentUser) -> LocationOut:
     return LocationOut.from_model(user, user.locale)
+
+
+@router.post(
+    "/location/detect",
+    response_model=LocationSuggestionOut,
+    summary="取得目前位置（由 IP 推估）",
+)
+async def detect_my_location(
+    user: CurrentUser, ip: ClientIp, locale: Locale
+) -> LocationSuggestionOut:
+    """「取得目前位置」按鈕打這支。
+
+    **不會存檔**，只回建議值。前端拿到後填進表單讓使用者確認，
+    再送 `PUT /v1/me/location`。
+
+    為什麼不用瀏覽器的 Geolocation API：Cloud Phone 是遠端渲染的瀏覽器，
+    官方明確不支援 positioning，就算能呼叫拿到的也是機房座標。
+    這裡改用 `X-Forwarded-For` 裡的使用者真實 IP 反查，
+    精度只到城市級。
+    """
+    provider = geoip_service.get_geoip_provider()
+    if not provider.enabled:
+        raise AppError(
+            "伺服器未啟用 IP 位置推估，請手動輸入位置",
+            code="geoip_disabled",
+            status_code=501,
+        )
+    if not geoip_service.is_public_ip(ip):
+        raise AppError(
+            "無法取得你的對外 IP（本機或內網連線），請手動輸入位置",
+            code="geoip_no_public_ip",
+        )
+
+    result = await provider.lookup(ip)
+    if result is None or result.is_empty:
+        raise AppError(
+            "查不到這個 IP 的位置，請手動輸入",
+            code="geoip_not_found",
+            status_code=404,
+        )
+
+    country = get_country(result.country_code)
+    # 對得到我們收錄的行政區時，名稱用自己的在地化資料（臺北市），
+    # 而不是反查服務給的英文（Taipei City）——前端會直接顯示這個字串
+    sub = lookup_subdivision(result.subdivision_code)
+    return LocationSuggestionOut(
+        country_code=result.country_code,
+        country_name=country.display_name(locale) if country else None,
+        subdivision_code=result.subdivision_code,
+        subdivision_name=sub.display_name(locale) if sub else result.subdivision_name,
+        locality=result.locality,
+        latitude=result.latitude,
+        longitude=result.longitude,
+        timezone=result.timezone,
+        provider=result.provider,
+    )
 
 
 @router.put("/location", response_model=UserOut, summary="登記 / 更新位置")
