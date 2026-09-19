@@ -140,6 +140,7 @@ async def list_markets(
     *,
     params: PageParams,
     country_code: str | None = None,
+    region: str | None = None,
     source_key: str | None = None,
     q: str | None = None,
     only_active: bool = True,
@@ -152,6 +153,8 @@ async def list_markets(
         conditions.append(Market.is_active.is_(True))
     if country_code:
         conditions.append(Market.country_code == country_code.upper())
+    if region:
+        conditions.append(Market.region == region)
     if q:
         conditions.append(
             or_(Market.name.ilike(f"%{q}%"), Market.name_en.ilike(f"%{q}%"))
@@ -214,3 +217,18 @@ async def get_mapping(session: AsyncSession, mapping_id: uuid.UUID) -> ProductSo
     if mapping is None:
         raise NotFoundError("Mapping not found", code="mapping_not_found")
     return mapping
+
+
+async def list_regions(
+    session: AsyncSession, *, country_code: str | None = None
+) -> list[tuple[str, int]]:
+    """有市場的地區清單與各自的市場數。給前端做「選地區」的選單。"""
+    stmt = (
+        select(Market.region, func.count())
+        .where(Market.region.is_not(None), Market.is_active.is_(True))
+        .group_by(Market.region)
+        .order_by(func.count().desc(), Market.region)
+    )
+    if country_code:
+        stmt = stmt.where(Market.country_code == country_code.upper())
+    return [(r, n) for r, n in (await session.execute(stmt)).all()]

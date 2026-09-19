@@ -137,7 +137,8 @@ users ── quotes ────────────────────
 | GET | `/products/{ref}/prices/official` | 各市場最新官方價 |
 | GET | `/products/{ref}/prices/series` | 每日走勢（跨市場以交易量加權） |
 | GET | `/products/{ref}/markets` | 有此品項資料的市場 |
-| GET | `/markets` | 市場清單 |
+| GET | `/markets` | 市場清單，可依 `country_code` / `region` 篩選 |
+| GET | `/markets/regions` | 有市場資料的縣市與市場數 |
 | GET | `/quotes` | 瀏覽報價，可依品項 / 買賣別 / 身分 / 地區篩選 |
 | GET | `/sources` | 資料來源與載入狀態 |
 

@@ -137,6 +137,13 @@ class MarketOut(BaseModel):
         )
 
 
+class RegionOut(BaseModel):
+    """有市場資料的地區。"""
+
+    region: str
+    market_count: int
+
+
 class SourceOut(BaseModel):
     """一個官方價格 extension 的對外樣貌。"""
 

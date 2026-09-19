@@ -682,11 +682,26 @@ GET /v1/markets
 | 參數 | 型別 | 說明 |
 | --- | --- | --- |
 | `country_code` | string | 國碼篩選 |
+| `region` | string | 縣市，例如 `台中市`。可用的值見 5.9 |
 | `source_key` | string | 只看某個資料來源 |
 | `q` | string | 名稱關鍵字（比對中 / 英文名） |
 | `limit` / `offset` | int | 分頁 |
 
 **回應**：`Page<MarketOut>`。
+
+`MarketOut` 欄位：
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `id` | UUID | 市場 ID |
+| `external_id` | string\|null | 來源系統的市場代碼（台灣農業部是 3 位數字，例如 `104`） |
+| `name` | string | 市場名稱 |
+| `name_en` | string\|null | 英文名（多數來源沒有） |
+| `country_code` | string | 國碼 |
+| `region` | string\|null | 縣市。**台灣的 20 個市場都有值** |
+| `timezone` | string | IANA 時區 |
+| `latitude` / `longitude` | float\|null | 座標。目前都是 null，來源沒有提供 |
+| `source_key` | string\|null | 資料來源的 key |
 
 ### 5.8 單一市場
 
@@ -697,6 +712,32 @@ GET /v1/markets/{market_id}
 **回應**：`MarketOut`。`market_id` 為 UUID，需為合法 UUID 格式（非 UUID 會回 422）。
 
 ---
+
+### 5.9 地區清單
+
+```
+GET /v1/markets/regions
+```
+
+有市場資料的縣市與各自的市場數，給前端做「選地區」的下拉選單。
+不分頁，直接回陣列。
+
+**Query 參數**：`country_code`（選填）
+
+```json
+[
+  { "region": "台中市", "market_count": 4 },
+  { "region": "台北市", "market_count": 4 },
+  { "region": "彰化縣", "market_count": 2 },
+  { "region": "雲林縣", "market_count": 1 }
+]
+```
+
+依市場數由多到少排序。拿到的 `region` 可以直接丟給 `GET /v1/markets?region=…`。
+
+> 台灣的縣市名稱用 `台` 不用 `臺`（與農業部回傳的市場名稱一致），
+> 前端做比對時請注意。
+
 
 ## 6. 民間報價（小農 / 盤商）
 
