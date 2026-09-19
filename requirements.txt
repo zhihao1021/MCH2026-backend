@@ -11,6 +11,16 @@ httpx>=0.28
 APScheduler>=3.11,<4.0
 python-slugify>=9.1
 
+# 國家 / 行政區 / 電話 / 幣別的標準資料集。
+# 有了這些，支援一個新國家不需要改任何程式碼或手寫資料（見 app/data/countries.py）。
+pycountry>=24.0          # ISO 3166-1 國家、ISO 3166-2 行政區、ISO 4217 幣別
+Babel>=2.14              # CLDR：在地化國名、territory → 幣別、官方語言
+phonenumbers>=8.13       # libphonenumber：國際電話碼與號碼驗證
+pytz>=2024.1             # IANA zone.tab 的「國家 → 時區」對照
+
+# 網頁解析。NAMIS（烏干達）沒有 API，只能解析 HTML 表格
+beautifulsoup4>=4.12
+
 # 開發 / 測試
 pytest>=9.0
 pytest-asyncio>=1.4

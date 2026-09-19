@@ -20,6 +20,9 @@ import httpx
 
 from app.core.config import settings
 
+# ISO 3166-2 沒有收錄行政區的國家（小島居多），用來測 fallback 路徑
+NO_SUBDIVISION_COUNTRY = "AW"   # 阿魯巴
+
 
 class Smoke:
     def __init__(self, base: str, admin_token: str) -> None:
@@ -214,10 +217,15 @@ class Smoke:
         tw = next((c for c in countries if c["code"] == "TW"), {})
         self.check("國家帶出撥號碼與幣別",
                    tw.get("dialing_code") == "886" and tw.get("currency") == "TWD", str(tw))
+        self.check("涵蓋範圍是整份 ISO 3166-1 而非手寫清單",
+                   len(codes) > 200, f"{len(codes)} 國")
         us = next((c for c in countries if c["code"] == "US"), {})
         self.check("美國為英制", us.get("unit_system") == "imperial", str(us.get("unit_system")))
-        self.check("未收錄行政區的國家有標記",
-                   us.get("has_subdivision_data") is False, str(us.get("has_subdivision_data")))
+        ug = next((c for c in countries if c["code"] == "UG"), {})
+        self.check("烏干達可用",
+                   ug.get("dialing_code") == "256" and ug.get("currency") == "UGX"
+                   and ug.get("default_timezone") == "Africa/Kampala", str(ug))
+        self.check("烏干達國名已在地化", ug.get("name") == "烏干達", str(ug.get("name")))
 
         r = self.req("GET", "/geo/countries/TW/subdivisions?locale=zh-Hant")
         subs = r.json() if r.status_code == 200 else []
@@ -229,8 +237,26 @@ class Smoke:
         subs = r.json() if r.status_code == 200 else []
         self.check("GET 日本都道府県", r.status_code == 200 and len(subs) == 47, f"{len(subs)} 筆")
 
-        r = self.req("GET", "/geo/countries/US/subdivisions")
-        self.check("未收錄的國家回空陣列而非錯誤",
+        # 行政區的階層：烏干達的一級太粗，實際單位在第二層
+        self.check("烏干達有第二層行政區",
+                   ug.get("has_second_level") is True
+                   and ug.get("subdivision_label_level2") == "District", str(ug)[:160])
+        regions = self.req("GET", "/geo/countries/UG/subdivisions").json()
+        self.check("烏干達一級是 4 個 Region",
+                   len(regions) == 4 and all(r["level"] == 1 for r in regions),
+                   f"{len(regions)} 筆")
+        self.check("一級有標記底下還有下一層",
+                   all(r["has_children"] for r in regions))
+        districts = self.req("GET", "/geo/countries/UG/subdivisions?parent=UG-E").json()
+        self.check("可往下鑽出 district",
+                   len(districts) > 20
+                   and all(d["level"] == 2 and d["parent_code"] == "UG-E" for d in districts),
+                   f"{len(districts)} 筆")
+        self.check("district 帶出 ISO 類型",
+                   any(d["code"] == "UG-203" and d["type"] == "District" for d in districts))
+
+        r = self.req("GET", f"/geo/countries/{NO_SUBDIVISION_COUNTRY}/subdivisions")
+        self.check("ISO 未收錄行政區的國家回空陣列而非錯誤",
                    r.status_code == 200 and r.json() == [], r.text[:120])
         r = self.req("GET", "/geo/countries/ZZ")
         self.check("未支援的國家回 404", r.status_code == 404, r.text[:120])
@@ -262,7 +288,7 @@ class Smoke:
         self.check("行政區名稱已解析", loc.get("subdivision_name") == "雲林縣", str(loc)[:160])
         self.check("時區依國家補上", loc.get("timezone") == "Asia/Taipei", str(loc.get("timezone")))
         self.check("地址由大到小組好",
-                   loc.get("formatted") == "648 臺灣 雲林縣 西螺鎮 延平路 100 號",
+                   loc.get("formatted") == "648 台灣 雲林縣 西螺鎮 延平路 100 號",
                    str(loc.get("formatted")))
 
         r = self.req("PUT", "/me/location", headers=auth,
@@ -293,6 +319,23 @@ class Smoke:
         self.check("換國家會清掉舊的行政區代碼",
                    us_loc.get("subdivision_code") is None, str(us_loc.get("subdivision_code")))
 
+        # 烏干達：用第二層的 district 登記位置
+        r = self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "UG", "subdivision_code": "UG-203", "locality": "Iganga Town",
+        })
+        ug_body = r.json() if r.status_code == 200 else {}
+        ug_loc = ug_body.get("location", {})
+        self.check("可用第二層 district 登記位置", r.status_code == 200, r.text[:200])
+        self.check("烏干達幣別與時區正確",
+                   ug_body.get("currency") == "UGX"
+                   and ug_loc.get("timezone") == "Africa/Kampala", str(ug_loc)[:160])
+        self.check("地址補上上一層的大區",
+                   ug_loc.get("formatted") == "Iganga Town, Iganga, Eastern, 烏干達",
+                   str(ug_loc.get("formatted")))
+        r = self.req("PUT", "/me/location", headers=auth,
+                     json={"country_code": "UG", "subdivision_code": "TW-YUN"})
+        self.check("跨國的行政區代碼仍被拒", r.status_code == 422, r.text[:140])
+
         user_id = me.get("id")
 
         self.req("PUT", "/me/location", headers=auth, json={
@@ -317,7 +360,7 @@ class Smoke:
         pub = self.req("GET", f"/users/{user_id}").json()
         self.check("private 只露出國家",
                    pub["location"]["subdivision_code"] is None
-                   and pub["location"]["formatted"] == "臺灣", str(pub["location"])[:160])
+                   and pub["location"]["formatted"] == "台灣", str(pub["location"])[:160])
 
         self.req("PUT", "/me/location", headers=auth, json={
             "country_code": "TW", "subdivision_code": "TW-YUN", "locality": "西螺鎮",

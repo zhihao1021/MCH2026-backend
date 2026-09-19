@@ -634,6 +634,9 @@ GET /v1/users/{user_id}/quotes
 
 前端組位置表單時用的參考資料。**不要在前端寫死任何一份清單。**
 
+資料來自 ISO 3166 / CLDR / libphonenumber，涵蓋 242 個國家與 5046 個行政區，
+不是後端手工維護的名單。
+
 ### 6.1 支援的國家
 
 ```
@@ -659,10 +662,13 @@ GET /v1/geo/countries?locale=zh-Hant
 ```
 
 - `dialing_code`：登入畫面的國碼選擇器用
-- `subdivision_label`：**直接拿來當表單標籤**（台灣是「縣市」、日本是「都道府県」、美國是 "State"）
-- `has_subdivision_data`：`false` 代表這個國家還沒收錄行政區清單，
+- `subdivision_label`：**直接拿來當表單標籤**（台灣是「縣市」、日本是「都道府県」、
+  烏干達是 "Region"、美國是 "State"）
+- `has_second_level` / `subdivision_label_level2` / `subdivision_count_level2`：
+  行政區有兩層的國家才有意義，見 6.3
+- `has_subdivision_data`：`false` 代表 ISO 3166-2 沒有收錄這個國家的行政區，
   表單請改成自由輸入的 `locality` 文字框
-- 依 `name_en` 排序，可直接餵給下拉選單
+- **依請求語系的國名排序**，可直接餵給下拉選單
 
 ### 6.2 單一國家
 
@@ -685,9 +691,32 @@ GET /v1/geo/countries/{code}/subdivisions?locale=zh-Hant
 ]
 ```
 
+**Query 參數**：
+
+| 參數 | 說明 |
+| --- | --- |
+| `parent` | 只列這個一級行政區底下的下一層，例如 `parent=UG-E` |
+| `level` | `1` = 一級（預設）；`2` = 全國的第二層 |
+
+**回應欄位**：`code` / `name` / `name_en` / `type`（ISO 類型，如 County、District）/
+`level`（1 或 2）/ `parent_code` / `has_children`。
+
 - 代碼是 **ISO 3166-2**，可直接送給 `PUT /v1/me/location` 的 `subdivision_code`
-- 目前收錄台灣（22 筆）與日本（47 筆）
-- **回空陣列不是錯誤**，代表該國尚未收錄，請改用 `locality` 自由輸入
+- **一級或二級都可以填**。有些國家的一級太粗，例如烏干達的一級是 4 個 Region、
+  實際要用的是底下 135 個 District：
+
+  ```
+  GET /v1/geo/countries/UG/subdivisions
+  → [{"code":"UG-E","name":"Eastern","type":"Region","level":1,"has_children":true}, ...]
+
+  GET /v1/geo/countries/UG/subdivisions?parent=UG-E
+  → [{"code":"UG-203","name":"Iganga","type":"District","level":2,"parent_code":"UG-E"}, ...]
+  ```
+
+  `CountryOut.has_second_level` 為 `true` 時才需要顯示第二個下拉選單，
+  標籤用 `subdivision_label_level2`。
+- ISO 只提供羅馬字名稱；台灣與日本的行政區有補上中日文，其餘顯示羅馬字
+- **回空陣列不是錯誤**，代表 ISO 沒有收錄該國（多是小島），請改用 `locality` 自由輸入
 
 ---
 

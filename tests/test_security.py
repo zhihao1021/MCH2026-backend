@@ -25,14 +25,33 @@ from app.core.security import (
         ("0912345678", "TW", "+886912345678"),
         ("0912-345-678", "TW", "+886912345678"),
         ("0912 345 678", "TW", "+886912345678"),
+        ("(0912) 345-678", "TW", "+886912345678"),
         ("+886912345678", None, "+886912345678"),
-        ("886912345678", "TW", "+886886912345678"),  # 已含國碼但沒 + 時視為本地號碼
+        # 已含國碼但沒有 + 時，libphonenumber 認得出來，不會再補一次國碼
+        ("886912345678", "TW", "+886912345678"),
         ("00886912345678", None, "+886912345678"),
         ("09012345678", "JP", "+819012345678"),
+        # 烏干達：接 NAMIS 之後必須要能用
+        ("0772123456", "UG", "+256772123456"),
+        ("+256772123456", None, "+256772123456"),
+        # 其他從來沒有手工收錄過的國家也一樣可用
+        ("0712345678", "KE", "+254712345678"),
+        ("09012345678", "NG", "+2349012345678"),
     ],
 )
 def test_normalize_phone(raw: str, country: str | None, expected: str) -> None:
     assert normalize_phone(raw, country) == expected
+
+
+def test_normalize_phone_rejects_numbers_that_are_not_real() -> None:
+    """長度對但不是有效號碼的，libphonenumber 會擋下來。
+
+    舊版只檢查「7-15 位數字」，這種明顯不存在的號碼會被放行。
+    """
+    with pytest.raises(InvalidPhoneError):
+        normalize_phone("0000000000", "TW")
+    with pytest.raises(InvalidPhoneError):
+        normalize_phone("0912345", "TW")      # 台灣手機號碼位數不足
 
 
 @pytest.mark.parametrize("bad", ["", "123", "abcdefgh", "+1234567890123456789"])
