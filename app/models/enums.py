@@ -67,3 +67,26 @@ class IngestStatus(StrEnum):
     SUCCESS = "success"
     PARTIAL = "partial"
     FAILED = "failed"
+
+
+class IntentStatus(StrEnum):
+    """消費者意向價格的狀態。"""
+
+    ACTIVE = "active"          # 目前生效的那一筆
+    SUPERSEDED = "superseded"  # 被同一人同品項的新意向取代
+    WITHDRAWN = "withdrawn"    # 使用者自行撤回
+
+
+class IntentExclusion(StrEnum):
+    """這筆意向為什麼沒被計入看板。
+
+    NULL 代表有計入。之所以保留原因而不是直接刪掉，是為了讓
+    信譽分的計算有依據，維運時也查得出「為什麼我的價格沒出現」。
+    """
+
+    BELOW_FLOOR = "below_floor"    # 低於產銷成本底線
+    OUTLIER = "outlier"            # 落在 IQR 容許區間外
+    SHADOWED = "shadowed"          # 提交者被影子封禁
+    NON_LOCAL = "non_local"        # 不在該區域生活圈內
+    UNTRUSTED_IP = "untrusted_ip"  # 來自機房 / Proxy IP
+    ZERO_WEIGHT = "zero_weight"    # 信譽權重已降到 0

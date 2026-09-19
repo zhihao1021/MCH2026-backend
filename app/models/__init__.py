@@ -9,6 +9,8 @@ from app.models.catalog import (
     ProductSourceMapping,
 )
 from app.models.enums import (
+    IntentExclusion,
+    IntentStatus,
     IngestStatus,
     OtpPurpose,
     ProductCategory,
@@ -17,6 +19,7 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.favorite import ProductFavorite
+from app.models.intent import IntentNotification, PriceIntent, UserReputation
 from app.models.price import IngestRun, OfficialPrice
 from app.models.quote import Quote
 from app.models.user import OtpCode, RefreshToken, User
@@ -30,6 +33,10 @@ __all__ = [
     "OfficialPrice",
     "OtpCode",
     "OtpPurpose",
+    "IntentExclusion",
+    "IntentNotification",
+    "IntentStatus",
+    "PriceIntent",
     "Product",
     "ProductFavorite",
     "ProductCategory",
@@ -41,4 +48,5 @@ __all__ = [
     "RefreshToken",
     "User",
     "UserRole",
+    "UserReputation",
 ]

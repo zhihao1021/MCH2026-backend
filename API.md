@@ -77,6 +77,11 @@ GET /healthz
 | 401 | `refresh_token_reused` | refresh token 重複使用（已作廢全部登入狀態） |
 | 401 | `account_disabled` | 帳號停用 |
 | 401 | `invalid_admin_token` | 管理端點 token 錯誤 |
+| 400 | `intent_region_required` | 提意向價前要先填所在地區 |
+| 400 | `intent_below_floor` | 意向價低於成本底線，`details` 帶底線價 |
+| 429 | `intent_cooldown` | 同一作物的意向價還在冷卻期（`details.retry_after`）|
+| 404 | `intent_not_found` / `notification_not_found` | 資源不存在 |
+| 403 | `not_intent_owner` / `not_notification_owner` | 只能操作自己的 |
 | 400 | `geoip_no_public_ip` | 定位：拿不到對外 IP（本機 / 內網），退回手動輸入 |
 | 404 | `geoip_not_found` | 定位：反查服務查不到這個 IP |
 | 501 | `geoip_disabled` | 定位：伺服器關閉了 IP 位置推估 |
@@ -1378,7 +1383,191 @@ DELETE /v1/quotes/{quote_id}
 
 ---
 
-## 9. 資料來源（公開）
+## 9. 消費者意向價格（期望價）⭐
+
+消費者回報「我願意用多少錢買」，平台聚合成**區域意向錨點**。
+這是**需求側**訊號，與第 8 節小農／盤商的供給側報價是兩回事。
+
+平台不涉入金流，沒有保證金也沒有預付款——亂填一個超低價的成本是零。
+所以每一筆寫入都要過四層防護，設計依據見 `code_artifact.md`。
+
+```
+GET  /v1/products/{ref}/intents/floor    輸入前先問成本底線
+POST /v1/products/{ref}/intents          提出我的期望價格
+GET  /v1/products/{ref}/intents/summary  區域意向看板（公開）
+GET  /v1/me/intents                      我填過的
+DEL  /v1/me/intents/{id}                 撤回
+GET  /v1/me/reputation                   我的信譽權重
+```
+
+> **單筆意向只有本人看得到。** 對外一律只給聚合後的看板，
+> 不會洩漏任何個人出價。
+
+### 9.1 成本底線
+
+```
+GET /v1/products/{ref}/intents/floor
+```
+
+輸入框旁邊先打這支，就能在送出前擋下過低的出價。
+
+```json
+{
+  "floor_price": "49.00",
+  "reference_price": "70.00",
+  "currency": "TWD",
+  "unit": "kg",
+  "sample_days": 7,
+  "source": "official_price_proxy:country",
+  "hint": "若出價過低脫離產地成本，小農將判定為無效需求而拒絕接單；合理報價才能最快促成產地直運。"
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `floor_price` | 低於此價會被拒絕寫入。**可能是 `null`**，代表沒有官方行情、不設限 |
+| `reference_price` | 推算基準：近 `sample_days` 日官方行情的中位數 |
+| `source` | `official_price_proxy:region` / `:country` / `:global`，或 `no_official_data` |
+| `hint` | 建議直接顯示給使用者的提示語 |
+
+> **底線是推算值，不是官方公定成本。** PRD 要的是「農政單位公定生產成本
+> ＋採收物流費」，那個資料源目前沒有。所以底線用近 7 日官方批發行情的
+> 中位數 × 0.7（批發價本來就高於產地成本）推算，係數可用
+> `INTENT_FLOOR_RATIO` 調整。真的接上成本資料源時只要換掉推算函式。
+>
+> `source` 的後綴代表算這個底線時用了多大的範圍：優先用你所在區域的行情，
+> 該區域沒資料就退回全國。這個退回是必要的——意向的區域名稱來自
+> ISO 3166-2 行政區（`臺北市`），而市場的區域名稱是資料源自訂的
+> （`台北市`），兩個命名空間不保證一致。
+
+### 9.2 提出期望價格
+
+```
+POST /v1/products/{ref}/intents
+```
+
+**任何登入者都能提**，不需要小農／盤商身分——這正是給消費者用的。
+
+```json
+{ "price": "80.00", "quantity": "5", "unit": "kg", "note": "願意揪團" }
+```
+
+| 欄位 | 必填 | 說明 |
+| --- | --- | --- |
+| `price` | ✅ | 期望價格 |
+| `quantity` | | 願意購買的數量。聚合後就是看板的「需求總量」——對產地來說「450 人、共 1200 箱」比單純的價格共識更有行動價值 |
+| `unit` / `currency` | | 省略則用品項標準單位與個人檔案幣別 |
+| `note` | | ≤300 字 |
+
+**同一作物再次提交會取代舊的**（舊的轉 `superseded`），不是累加。
+
+**依序檢查**：
+
+| HTTP | code | 說明 |
+| --- | --- | --- |
+| 400 | `intent_region_required` | 個人檔案還沒填所在地，歸不到任何看板。先 `PUT /v1/me/location` |
+| 429 | `intent_cooldown` | 同一作物的冷卻期（預設 7 天）。`details.retry_after` 是秒數 |
+| 400 | `intent_below_floor` | 低於成本底線。`details` 帶 `floor_price` / `reference_price` 供前端提示 |
+
+> **通過檢查不代表一定計入看板。** 若來源是機房／VPN IP，或帳號已被
+> 影子封禁，**仍然回 201 且使用者看得到自己的數字**，但回應的
+> `excluded_reason` 會標記，聚合時不算。這是刻意的——讓對方以為成功了，
+> 才不會立刻換帳號重來。
+
+### 9.3 區域意向看板
+
+```
+GET /v1/products/{ref}/intents/summary?region=臺北市
+```
+
+公開端點。`region` 省略則看全國。
+
+```json
+{
+  "product": { "...": "ProductOut" },
+  "region": "臺北市",
+  "anchor_price": "80.75",
+  "median": "80.75",
+  "trimmed_mean": "80.22",
+  "q1": "77.30", "q3": "84.10",
+  "lower_bound": "71.94", "upper_bound": "89.16",
+  "min_price": "74.20", "max_price": "87.60",
+  "floor_price": "49.00",
+  "demand_quantity": "1200.000",
+  "demand_respondents": 8,
+  "sample_count": 12,
+  "submitted_count": 15,
+  "excluded_count": 3,
+  "exclusions": { "outlier": 3 }
+}
+```
+
+| 欄位 | 說明 |
+| --- | --- |
+| `anchor_price` | **這才是要顯示的錨點**：信譽加權的中位數 |
+| `median` / `trimmed_mean` | 未加權的中位數與截尾均值，供對照 |
+| `lower_bound` / `upper_bound` | IQR 容許區間，區間外視為離群值 |
+| `demand_quantity` | 需求總量（只加總有填數量的意向）。`null` 代表沒人填數量 |
+| `sample_count` | 納入計算的筆數 |
+| `exclusions` | 各排除原因的筆數，例如 `{"outlier": 3, "shadowed": 1}` |
+
+> **刻意不提供算術平均。** 一筆惡意的 999999 就能把平均拉垮，中位數卻
+> 幾乎不動——這是 PRD 目標一的核心。實測 12 筆正常意向被灌入 3 筆
+> 12 倍的極端值後，`anchor_price` 完全沒變（80.75 → 80.75）。
+
+### 9.4 我的意向與信譽
+
+```
+GET    /v1/me/intents?include_history=false
+DELETE /v1/me/intents/{intent_id}
+GET    /v1/me/reputation
+```
+
+`IntentOut` 的 `excluded_reason` 會說明為什麼沒被計入：
+
+| 值 | 意思 |
+| --- | --- |
+| `null` | 有計入 |
+| `outlier` | 落在 IQR 容許區間外 |
+| `below_floor` | 低於成本底線 |
+| `shadowed` | 提交者被影子封禁 |
+| `untrusted_ip` | 來自機房 / Proxy IP |
+| `non_local` | 不在該區域生活圈內 |
+| `zero_weight` | 信譽權重已降到 0 |
+
+信譽（`GET /v1/me/reputation`）：
+
+```json
+{ "weight": 1.2, "samples": 4, "hits": 4, "misses": 0, "has_verified_purchase": false }
+```
+
+權重 0.0 ~ 2.0，新使用者 1.0。落在共識區間（中位數 ±15%）內緩慢上調
+（+0.05），偏離 2 個標準差以上快速下調（−0.25）。**上調慢、下調快**是
+刻意的：錯殺一個正常使用者的代價，遠低於讓刷票者維持高權重。
+
+> 回應**不包含**影子封禁狀態。影子封禁的重點就是對方不知道——
+> 知道了就會換帳號重來。
+
+### 9.5 產地開團的優先通知
+
+```
+GET  /v1/me/notifications                        我收到的開團通知
+POST /v1/me/notifications/{id}/respond           回報已讀 / 已點擊
+POST /v1/admin/quotes/{quote_id}/match-intents   找出該通知誰（需 admin token）
+```
+
+小農依看板開出價格後，`match-intents` 找出**意向價 >= 開價**且同區域的使用者，
+**依意向價由低到高排序**——填的價格越貼近產地實際開價的人越先拿到配額。
+這是 PRD 要的博弈方向：虛報低價進不了名單，虛報高價也搶不到優先權。
+
+`POST /me/notifications/{id}/respond` 不只是統計。多次收到推播卻完全零響應的
+帳號會被判定為「虛假幽靈需求」並扣信譽，所以前端務必在使用者開啟通知時呼叫。
+
+> **後端只做比對與紀錄，不負責實際發送**——推播管道還沒接。
+
+---
+
+## 10. 資料來源（公開）
 
 ### 9.1 資料來源清單
 
@@ -1435,7 +1624,7 @@ GET /v1/sources/{key}
 
 ---
 
-## 10. 管理端點（維運用，不給 App）
+## 11. 管理端點（維運用，不給 App）
 
 全部需要 header `X-Admin-Token: <ADMIN_API_TOKEN>`。給部署後維運使用，
 前端 App 不需要（也無法）呼叫。以下僅列清單：
@@ -1457,7 +1646,20 @@ GET /v1/sources/{key}
 
 ---
 
-## 11. 枚舉值一覽
+## 12. 枚舉值一覽
+
+### `IntentStatus`（意向狀態）
+
+| 值 | 說明 |
+| --- | --- |
+| `active` | 目前生效的那一筆 |
+| `superseded` | 被同一人同作物的新意向取代 |
+| `withdrawn` | 使用者自行撤回 |
+
+### `IntentExclusion`（沒被計入看板的原因）
+
+`null` 代表有計入。其餘見 9.4 的表。
+
 
 ### `UserRole`（身分）
 
@@ -1515,7 +1717,7 @@ GET /v1/sources/{key}
 
 ---
 
-## 12. 給前端的實作建議
+## 13. 給前端的實作建議
 
 1. **詳情頁用 `/products/{ref}/overview`**：一次拿齊官方價、走勢、報價摘要，
    省兩趟往返（功能機在 4G 下這差別很明顯）。
@@ -1546,6 +1748,11 @@ GET /v1/sources/{key}
     會拿到機房座標。改打 `POST /v1/me/location/detect`（4.4），
     把回來的值填進表單讓使用者確認，並把 `notice` 顯示出來。
     三種錯誤（`geoip_*`）都只要退回手動輸入，不要擋住流程。
-15. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
+15. **意向價輸入前先問 `/intents/floor`**：拿 `floor_price` 做即時驗證，
+    低於底線就在前端擋下並顯示 `hint`，不要等送出才報錯。看板上同時顯示
+    `anchor_price` 與 `demand_quantity`，那兩個數字才是對產地有意義的訊號。
+16. **通知一開啟就打 `/me/notifications/{id}/respond`**：零響應會被判定為
+    幽靈需求並扣信譽，漏打會冤枉使用者。
+17. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
     後端已經算好。身分註冊後不能改，所以這個值在整個 session 內是穩定的，
     可以安心快取。選錯身分的使用者請導向客服，不要在 App 裡提供切換。

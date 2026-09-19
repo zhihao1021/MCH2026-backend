@@ -70,6 +70,35 @@ class Settings(BaseSettings):
     quote_default_ttl_hours: int = 48
     quote_max_active_per_user: int = 50
 
+    # ---- 消費者意向價格與防刷（見 ../code_artifact.md）----
+    # 目標一：強健統計
+    intent_iqr_multiplier: float = Field(default=1.5, ge=0.5, le=5.0)
+    intent_trim_fraction: float = Field(default=0.1, ge=0.0, le=0.4)
+    # 樣本太少時做 IQR 只會誤殺，低於這個數就不過濾
+    intent_min_samples_for_iqr: int = Field(default=8, ge=3)
+    # 目標一：成本硬約束。底線 = 近 N 日官方行情中位數 x ratio + 物流費
+    intent_floor_lookback_days: int = Field(default=7, ge=1, le=90)
+    intent_floor_ratio: float = Field(default=0.7, ge=0.0, le=2.0)
+    intent_floor_logistics: float = Field(default=0.0, ge=0.0)
+    # 目標二：行為摩擦
+    intent_cooldown_days: int = Field(default=7, ge=0, le=365)
+    intent_geofence_km: float = Field(default=15.0, ge=0.0)
+    intent_block_hosting_ip: bool = True
+    # 目標三：信譽權重
+    intent_weight_initial: float = Field(default=1.0, ge=0.0, le=2.0)
+    intent_weight_min: float = Field(default=0.0, ge=0.0)
+    intent_weight_max: float = Field(default=2.0, ge=1.0)
+    # 上調慢、下調快：錯殺正常使用者的代價遠低於讓刷票者維持高權重
+    intent_weight_step_up: float = Field(default=0.05, gt=0)
+    intent_weight_step_down: float = Field(default=0.25, gt=0)
+    intent_consensus_band_pct: float = Field(default=15.0, gt=0)
+    intent_deviation_sigma: float = Field(default=2.0, gt=0)
+    intent_min_samples_for_reputation: int = Field(default=5, ge=2)
+    intent_shadow_ban_strikes: int = Field(default=3, ge=1)
+    intent_shadow_ban_weight: float = Field(default=0.0, ge=0.0)
+    # 目標四：收到這麼多次推播卻零響應，視為幽靈需求
+    intent_ghost_notification_threshold: int = Field(default=5, ge=1)
+
     # ---- Demo 用的國家範圍 ----
     # 讀取層的過濾：只影響市場 / 行情 / 地區 / 報價 / 資料來源的查詢結果，
     # 不影響註冊與寫入，也不刪任何資料。白名單優先。

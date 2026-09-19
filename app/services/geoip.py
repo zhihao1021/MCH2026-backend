@@ -54,6 +54,9 @@ class GeoIpResult:
     subdivision_name: str | None = None
     locality: str | None = None
     timezone: str | None = None
+    # 這個 IP 是不是機房 / VPN / Proxy。意向價格的防刷會用到（PRD 2.2）
+    hosting: bool = False
+    proxy: bool = False
     provider: str = "none"
 
     @property
@@ -87,7 +90,10 @@ class IpApiProvider(GeoIpProvider):
 
     name = "ip_api"
     ENDPOINT = "http://ip-api.com/json/{ip}"
-    FIELDS = "status,message,country,countryCode,region,regionName,city,lat,lon,timezone"
+    FIELDS = (
+        "status,message,country,countryCode,region,regionName,city,lat,lon,"
+        "timezone,proxy,hosting"
+    )
 
     async def lookup(self, ip: str) -> GeoIpResult | None:
         try:
@@ -114,6 +120,8 @@ class IpApiProvider(GeoIpProvider):
             subdivision_name=(data.get("regionName") or "").strip() or None,
             locality=(data.get("city") or "").strip() or None,
             timezone=(data.get("timezone") or "").strip() or None,
+            hosting=bool(data.get("hosting")),
+            proxy=bool(data.get("proxy")),
             provider=self.name,
         )
 
@@ -193,3 +201,17 @@ def _mask_ip(ip: str) -> str:
         return ip.rsplit(":", 2)[0] + ":*"
     parts = ip.split(".")
     return ".".join(parts[:2] + ["*", "*"]) if len(parts) == 4 else "*"
+
+
+async def ip_flags(ip: str) -> tuple[bool, bool]:
+    """(hosting, proxy)。查不到一律回 (False, False) —— 寧可放行也不要誤擋真人。
+
+    給意向價格的防刷用：機房或 Proxy 來的提交權重歸零（PRD 2.2）。
+    """
+    provider = get_geoip_provider()
+    if not provider.enabled or not is_public_ip(ip):
+        return False, False
+    result = await provider.lookup(ip)
+    if result is None:
+        return False, False
+    return result.hosting, result.proxy

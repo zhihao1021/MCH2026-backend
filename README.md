@@ -144,6 +144,8 @@ users ── quotes ────────────────────
 | GET | `/markets` | 市場清單，可依 `country_code` / `region` 篩選 |
 | GET | `/markets/regions` | 有市場資料的縣市與市場數 |
 | GET | `/quotes` | 瀏覽報價，可依品項 / 買賣別 / 身分 / 地區篩選 |
+| GET | `/products/{ref}/intents/summary` | **消費者意向看板**：區域錨點價與需求總量 |
+| GET | `/products/{ref}/intents/floor` | 意向價的成本底線 |
 | GET | `/sources` | 資料來源與載入狀態 |
 | GET | `/users/{id}` | 公開個人檔案（位置依對方的公開程度揭露） |
 | GET | `/users/{id}/quotes` | 某人目前有效的報價 |
@@ -162,6 +164,10 @@ users ── quotes ────────────────────
 | POST | `/me/location/detect` | 「取得目前位置」按鈕。由 IP 推估，只回建議值不存檔 |
 | GET | `/me/favorites` | **收藏的作物**，含每個作物的最新價與漲跌 |
 | PUT,DELETE | `/me/favorites/{ref}` | 加入 / 取消收藏（PUT 冪等，`ref` 可用 slug） |
+| POST | `/products/{ref}/intents` | **提出期望價格**（消費者也能用，不需報價身分）|
+| GET,DELETE | `/me/intents` | 我的意向價 / 撤回 |
+| GET | `/me/reputation` | 我的信譽權重 |
+| GET | `/me/notifications` | 產地開團通知；`/{id}/respond` 回報響應 |
 | GET | `/me/quotes` | 我的報價（含已下架） |
 
 報價預設 48 小時後過期，排程每 10 分鐘把過期的轉成 `expired`。
