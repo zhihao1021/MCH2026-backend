@@ -221,14 +221,19 @@ async def get_mapping(session: AsyncSession, mapping_id: uuid.UUID) -> ProductSo
 
 async def list_regions(
     session: AsyncSession, *, country_code: str | None = None
-) -> list[tuple[str, int]]:
-    """有市場的地區清單與各自的市場數。給前端做「選地區」的選單。"""
+) -> list[tuple[str, str, int]]:
+    """有市場的地區清單與各自的市場數。給前端做「選地區」的選單。
+
+    回傳 (region, country_code, market_count)。國碼一定要一起帶出去——
+    不同國家可能有同名的地區，而且前端要能依國家分組。
+    排序也以國家為第一層，同一國的地區才不會被打散。
+    """
     stmt = (
-        select(Market.region, func.count())
+        select(Market.region, Market.country_code, func.count())
         .where(Market.region.is_not(None), Market.is_active.is_(True))
-        .group_by(Market.region)
-        .order_by(func.count().desc(), Market.region)
+        .group_by(Market.region, Market.country_code)
+        .order_by(Market.country_code, func.count().desc(), Market.region)
     )
     if country_code:
         stmt = stmt.where(Market.country_code == country_code.upper())
-    return [(r, n) for r, n in (await session.execute(stmt)).all()]
+    return [(region, cc, n) for region, cc, n in (await session.execute(stmt)).all()]

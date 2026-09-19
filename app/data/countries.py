@@ -1,39 +1,51 @@
-"""國家與一級行政區的參考資料。
+"""國家與行政區的參考資料。
 
-這個 App 不限於單一國家使用，所以凡是「跟國家有關的預設值」都集中在這裡，
-不散落在各處的字典裡：撥號碼（電話正規化用）、幣別（報價用）、
-預設時區與語系、度量衡制（公制 / 英制），以及一級行政區清單。
+這個 App 不綁定任何特定國家，所以這裡不維護自己的國家清單，
+而是直接架在國際標準資料上：
 
-行政區代碼一律使用 **ISO 3166-2**（例如 TW-TPE、JP-13、US-CA）。
-用國際標準而不是自訂代碼，之後要跟其他系統對接才不會需要另一層對照表。
+| 資料 | 來源 | 涵蓋範圍 |
+| --- | --- | --- |
+| 國家代碼與名稱 | `pycountry`（ISO 3166-1） | 249 個 |
+| 一級 / 二級行政區 | `pycountry`（ISO 3166-2） | 5046 個 |
+| 在地化國名 | `babel`（CLDR） | 各語系 |
+| 幣別 | `babel`（CLDR territory → ISO 4217） | 全部 |
+| 國際電話碼與號碼驗證 | `phonenumbers`（libphonenumber） | 全部 |
+| 時區 | `pytz`（IANA zone.tab） | 全部 |
 
-### 沒有行政區清單的國家怎麼辦
+原本這裡是一份手寫的 12 國字典，新增一個國家得手動補撥號碼、幣別、
+時區與行政區清單——接烏干達時就卡在這裡。改用標準資料集之後，
+**任何國家都是現成可用的，不需要改任何程式碼或資料**。
 
-`SUBDIVISIONS` 目前只收了台灣與日本（有官方價格來源的兩個國家）。
-其餘國家 `subdivisions` 會是空的，`has_subdivision_data` 為 False，
-此時前端改用自由輸入的 `locality` 欄位即可——API 不會因此擋下註冊。
-
-### 要新增一個國家
-
-1. 在 `COUNTRIES` 加一筆 `Country`；
-2. 若有一級行政區清單，在 `SUBDIVISIONS` 補上（代碼請照 ISO 3166-2）。
-
-不需要改動任何程式邏輯。
+底下仍保留幾張小的覆蓋表，補標準資料沒有、或標準資料不適合直接對使用者
+顯示的部分（見各表上的說明）。覆蓋是加法：沒有覆蓋就用標準資料。
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+import phonenumbers
+import pycountry
+import pytz
+from babel import Locale, UnknownLocaleError
+from babel.languages import get_official_languages
+from babel.numbers import get_territory_currencies
+
 from app.models.enums import UnitSystem
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "COUNTRIES",
     "Country",
     "Subdivision",
+    "country_codes",
     "default_currency",
+    "default_locale",
     "default_timezone",
+    "default_unit_system",
     "dialing_code",
     "get_country",
     "is_supported_country",
@@ -41,213 +53,350 @@ __all__ = [
     "list_subdivisions",
     "lookup_subdivision",
     "normalize_subdivision_code",
+    "subdivision_children",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 覆蓋表
+# ---------------------------------------------------------------------------
+
+# 使用英制的國家。ISO / CLDR 都沒有這個資訊，但它會影響價格單位（lb vs kg），
+# 對農產品 App 來說很實際。
+_IMPERIAL_COUNTRIES = frozenset({"US", "LR", "MM"})
+
+# 跨多時區的國家（31 個）要挑一個當預設。pytz 給的清單順序不保證是
+# 「最多人用的那個」，這裡把幾個明確的指定掉，其餘取清單第一個。
+_PRIMARY_TIMEZONE: dict[str, str] = {
+    "US": "America/New_York",
+    "CA": "America/Toronto",
+    "AU": "Australia/Sydney",
+    "BR": "America/Sao_Paulo",
+    "RU": "Europe/Moscow",
+    "CN": "Asia/Shanghai",
+    "MX": "America/Mexico_City",
+    "ID": "Asia/Jakarta",
+    "AR": "America/Argentina/Buenos_Aires",
+    "CD": "Africa/Kinshasa",
+    "KZ": "Asia/Almaty",
+    "ES": "Europe/Madrid",
+    "PT": "Europe/Lisbon",
+    "CL": "America/Santiago",
+    "EC": "America/Guayaquil",
+    "NZ": "Pacific/Auckland",
+}
+
+# 一級行政區在該國的通稱，給前端當表單標籤。
+# 沒有覆蓋時會用 ISO 3166-2 的 type 欄位推出來（例如烏干達 → Region、
+# 肯亞 → County），那個是英文的，所以中文語系國家才需要手動補。
+_SUBDIVISION_LABELS: dict[str, str] = {
+    "TW": "縣市",
+    "JP": "都道府県",
+    "CN": "省份",
+    "HK": "地區",
+    "KR": "시도",
+}
+
+# 少數 ISO type 直接拿來當表單標籤會很拗口，這裡換個說法。
+_TYPE_LABEL_CLEANUP: dict[str, str] = {
+    "Geographical region": "Region",
+    "Geographical unit": "Region",
+    "Geographical entity": "Region",
+    "Special municipality": "Municipality",
+    "Metropolitan department": "Department",
+    "Autonomous republic": "Republic",
+}
+
+# 郵遞區號範例。沒有標準資料集，只給幾個常用的當表單提示；
+# 沒有值就是 None，前端不顯示提示即可。不使用郵遞區號的國家也是 None。
+_POSTAL_EXAMPLES: dict[str, str] = {
+    "TW": "100", "JP": "100-0001", "KR": "03187", "CN": "100000",
+    "US": "10001", "GB": "SW1A 1AA", "DE": "10115", "FR": "75001",
+    "SG": "018956", "MY": "50000", "TH": "10200", "VN": "100000",
+    "PH": "1000", "ID": "10110", "IN": "110001", "AU": "2000",
+}
+
+# CLDR 的「第一個官方語言」偶爾不是市場上實際通用的那個
+# （例如烏干達的官方語言是斯瓦希里語與英語，但農產品行情實際上用英語）。
+_DEFAULT_LOCALE: dict[str, str] = {
+    "UG": "en",
+    "KE": "en",
+    "TZ": "sw",
+    "IN": "en",
+    "NG": "en",
+    "ZA": "en",
+    "PK": "en",
+    "PH": "en",
+    "SG": "en",
+    "HK": "zh-Hant",
+    "TW": "zh-Hant",
+}
+
+# ISO 3166-2 只給羅馬字名稱（TW-YUN → "Yunlin"、JP-13 → "Tokyo"）。
+# 這裡補上當地語言的名稱；沒補到的就顯示 ISO 的羅馬字，不會出錯只是不好看。
+_LOCAL_SUBDIVISION_NAMES: dict[str, dict[str, str]] = {}
+
+
+def _register_local_names(pairs: list[tuple[str, str]], locale: str) -> None:
+    for code, name in pairs:
+        _LOCAL_SUBDIVISION_NAMES.setdefault(code, {})[locale] = name
+
+
+_register_local_names([
+    ("TW-CHA", "彰化縣"), ("TW-CYI", "嘉義市"), ("TW-CYQ", "嘉義縣"),
+    ("TW-HSQ", "新竹縣"), ("TW-HSZ", "新竹市"), ("TW-HUA", "花蓮縣"),
+    ("TW-ILA", "宜蘭縣"), ("TW-KEE", "基隆市"), ("TW-KHH", "高雄市"),
+    ("TW-KIN", "金門縣"), ("TW-LIE", "連江縣"), ("TW-MIA", "苗栗縣"),
+    ("TW-NAN", "南投縣"), ("TW-NWT", "新北市"), ("TW-PEN", "澎湖縣"),
+    ("TW-PIF", "屏東縣"), ("TW-TAO", "桃園市"), ("TW-TNN", "臺南市"),
+    ("TW-TPE", "臺北市"), ("TW-TTT", "臺東縣"), ("TW-TXG", "臺中市"),
+    ("TW-YUN", "雲林縣"),
+], "zh-Hant")
+
+_register_local_names([
+    ("JP-01", "北海道"), ("JP-02", "青森県"), ("JP-03", "岩手県"),
+    ("JP-04", "宮城県"), ("JP-05", "秋田県"), ("JP-06", "山形県"),
+    ("JP-07", "福島県"), ("JP-08", "茨城県"), ("JP-09", "栃木県"),
+    ("JP-10", "群馬県"), ("JP-11", "埼玉県"), ("JP-12", "千葉県"),
+    ("JP-13", "東京都"), ("JP-14", "神奈川県"), ("JP-15", "新潟県"),
+    ("JP-16", "富山県"), ("JP-17", "石川県"), ("JP-18", "福井県"),
+    ("JP-19", "山梨県"), ("JP-20", "長野県"), ("JP-21", "岐阜県"),
+    ("JP-22", "静岡県"), ("JP-23", "愛知県"), ("JP-24", "三重県"),
+    ("JP-25", "滋賀県"), ("JP-26", "京都府"), ("JP-27", "大阪府"),
+    ("JP-28", "兵庫県"), ("JP-29", "奈良県"), ("JP-30", "和歌山県"),
+    ("JP-31", "鳥取県"), ("JP-32", "島根県"), ("JP-33", "岡山県"),
+    ("JP-34", "広島県"), ("JP-35", "山口県"), ("JP-36", "徳島県"),
+    ("JP-37", "香川県"), ("JP-38", "愛媛県"), ("JP-39", "高知県"),
+    ("JP-40", "福岡県"), ("JP-41", "佐賀県"), ("JP-42", "長崎県"),
+    ("JP-43", "熊本県"), ("JP-44", "大分県"), ("JP-45", "宮崎県"),
+    ("JP-46", "鹿児島県"), ("JP-47", "沖縄県"),
+], "ja")
+
+
+# ---------------------------------------------------------------------------
+# 型別
+# ---------------------------------------------------------------------------
+
+
+def _match_locale(names: dict[str, str], locale: str) -> str | None:
+    """先找完全相符的語系標籤，再退一階只比對語言。"""
+    if locale in names:
+        return names[locale]
+    base = locale.split("-")[0].split("_")[0]
+    for key, value in names.items():
+        if key.split("-")[0].split("_")[0] == base:
+            return value
+    return None
 
 
 @dataclass(frozen=True)
 class Subdivision:
-    """一級行政區（縣市 / 都道府県 / state / province）。"""
+    """ISO 3166-2 的行政區。可能是第一層，也可能是某個第一層底下的第二層。"""
 
-    # ISO 3166-2，含國碼前綴，例如 "TW-TPE"
-    code: str
-    name_en: str
-    # 當地語言名稱：{locale: name}
-    names: dict[str, str] = field(default_factory=dict)
+    code: str                      # 例如 TW-YUN、UG-E、UG-203
+    name: str                      # ISO 的羅馬字名稱
+    type: str                      # ISO 的類型，例如 County / District / Region
+    country_code: str
+    parent_code: str | None = None
+    names: dict[str, str] = field(default_factory=dict)   # 當地語言名稱
+
+    @property
+    def level(self) -> int:
+        return 1 if self.parent_code is None else 2
 
     def display_name(self, locale: str) -> str:
-        """取指定語系的名稱，沒有就退回英文。"""
-        if locale in self.names:
-            return self.names[locale]
-        # zh-Hant-TW 這類帶地區的標籤，退一階再找
-        base = locale.split("-")[0]
-        for key, value in self.names.items():
-            if key.split("-")[0] == base:
-                return value
-        return self.name_en
+        return _match_locale(self.names, locale) or self.name
 
 
 @dataclass(frozen=True)
 class Country:
-    code: str                    # ISO 3166-1 alpha-2
+    code: str
     name_en: str
-    names: dict[str, str]        # {locale: name}
-    dialing_code: str            # 不含 "+"
-    currency: str                # ISO 4217
+    dialing_code: str
+    currency: str
     default_locale: str
-    default_timezone: str        # IANA；跨多時區的國家取主要那個
+    default_timezone: str
     unit_system: UnitSystem
-    # 一級行政區在該國的稱呼，給前端當表單標籤用
     subdivision_label: str
-    # 郵遞區號的提示格式；None 代表該國不使用郵遞區號
-    postal_code_example: str | None = None
+    # 有第二層的國家（例如烏干達的 district）才有值。
+    # 前端據此決定要不要顯示「再選下一層」的欄位。
+    subdivision_label_level2: str | None
+    postal_code_example: str | None
+    subdivision_count: int
+    subdivision_count_level2: int = 0
+
+    @property
+    def has_subdivision_data(self) -> bool:
+        return self.subdivision_count > 0
+
+    @property
+    def has_second_level(self) -> bool:
+        return self.subdivision_count_level2 > 0
 
     def display_name(self, locale: str) -> str:
-        if locale in self.names:
-            return self.names[locale]
-        base = locale.split("-")[0]
-        for key, value in self.names.items():
-            if key.split("-")[0] == base:
-                return value
-        return self.name_en
+        """用 CLDR 的在地化國名；查不到就退回英文。"""
+        try:
+            territories = Locale.parse(locale.replace("-", "_")).territories
+        except (UnknownLocaleError, ValueError, TypeError):
+            return self.name_en
+        return territories.get(self.code) or self.name_en
 
 
 # ---------------------------------------------------------------------------
-# 國家
+# 建構
 # ---------------------------------------------------------------------------
 
-COUNTRIES: dict[str, Country] = {
-    c.code: c
-    for c in [
-        Country(
-            code="TW", name_en="Taiwan",
-            names={"zh-Hant": "臺灣", "ja": "台湾"},
-            dialing_code="886", currency="TWD",
-            default_locale="zh-Hant", default_timezone="Asia/Taipei",
-            unit_system=UnitSystem.METRIC, subdivision_label="縣市",
-            postal_code_example="100",
+
+def _timezone_for(code: str) -> str:
+    if code in _PRIMARY_TIMEZONE:
+        return _PRIMARY_TIMEZONE[code]
+    zones = pytz.country_timezones.get(code)
+    # BV / HM 這種無人島沒有時區資料
+    return zones[0] if zones else "UTC"
+
+
+def _currency_for(code: str) -> str:
+    try:
+        currencies = get_territory_currencies(code)
+    except Exception:  # pragma: no cover - CLDR 沒收錄的territory
+        currencies = []
+    return currencies[0] if currencies else "USD"
+
+
+def _locale_for(code: str) -> str:
+    if code in _DEFAULT_LOCALE:
+        return _DEFAULT_LOCALE[code]
+    try:
+        langs = get_official_languages(code)
+    except Exception:  # pragma: no cover
+        langs = ()
+    return langs[0].replace("_", "-") if langs else "en"
+
+
+def _dialing_for(code: str) -> str | None:
+    cc = phonenumbers.country_code_for_region(code)
+    # libphonenumber 對沒有電話區碼的 territory 回 0
+    return str(cc) if cc else None
+
+
+def _label_from_types(subs: list[Subdivision]) -> str | None:
+    """用該層最常見的 ISO type 當標籤，例如烏干達第二層 → District。"""
+    if not subs:
+        return None
+    counts: dict[str, int] = {}
+    for s in subs:
+        counts[s.type] = counts.get(s.type, 0) + 1
+    common = max(counts.items(), key=lambda kv: kv[1])[0]
+    return _TYPE_LABEL_CLEANUP.get(common, common)
+
+
+def _subdivision_label(code: str, tops: list[Subdivision]) -> str:
+    """一級行政區的通稱。沒有覆蓋時用 ISO 最常見的 type。"""
+    if code in _SUBDIVISION_LABELS:
+        return _SUBDIVISION_LABELS[code]
+    return _label_from_types(tops) or "Region"
+
+
+@lru_cache(maxsize=None)
+def _subdivisions_of(country_code: str) -> tuple[Subdivision, ...]:
+    """某個國家的全部 ISO 3166-2 行政區（含第一層與第二層）。"""
+    raw = pycountry.subdivisions.get(country_code=country_code) or []
+    out = []
+    for s in raw:
+        out.append(
+            Subdivision(
+                code=s.code,
+                name=s.name,
+                type=s.type,
+                country_code=country_code,
+                parent_code=s.parent_code,
+                names=dict(_LOCAL_SUBDIVISION_NAMES.get(s.code, {})),
+            )
+        )
+    # 第一層在前，其次依代碼排序，讓下拉選單順序穩定
+    out.sort(key=lambda s: (s.level, s.code))
+    return tuple(out)
+
+
+@lru_cache(maxsize=None)
+def _build_country(code: str) -> Country | None:
+    record = pycountry.countries.get(alpha_2=code)
+    if record is None:
+        return None
+    dialing = _dialing_for(code)
+    if dialing is None:
+        # 沒有國際電話碼就沒辦法做 OTP 登入，這種 territory 直接不支援
+        return None
+
+    subs = _subdivisions_of(code)
+    tops = [s for s in subs if s.level == 1]
+    seconds = [s for s in subs if s.level == 2]
+    return Country(
+        code=code,
+        # pycountry 的 common_name 比 name 適合顯示（例如 "Taiwan" vs
+        # "Taiwan, Province of China"）；在地化名稱走 CLDR
+        name_en=getattr(record, "common_name", None) or record.name,
+        dialing_code=dialing,
+        currency=_currency_for(code),
+        default_locale=_locale_for(code),
+        default_timezone=_timezone_for(code),
+        unit_system=(
+            UnitSystem.IMPERIAL if code in _IMPERIAL_COUNTRIES else UnitSystem.METRIC
         ),
-        Country(
-            code="JP", name_en="Japan",
-            names={"ja": "日本", "zh-Hant": "日本"},
-            dialing_code="81", currency="JPY",
-            default_locale="ja", default_timezone="Asia/Tokyo",
-            unit_system=UnitSystem.METRIC, subdivision_label="都道府県",
-            postal_code_example="100-0001",
-        ),
-        Country(
-            code="KR", name_en="South Korea",
-            names={"ko": "대한민국", "zh-Hant": "南韓"},
-            dialing_code="82", currency="KRW",
-            default_locale="ko", default_timezone="Asia/Seoul",
-            unit_system=UnitSystem.METRIC, subdivision_label="시도",
-            postal_code_example="03187",
-        ),
-        Country(
-            code="CN", name_en="China",
-            names={"zh-Hans": "中国", "zh-Hant": "中國"},
-            dialing_code="86", currency="CNY",
-            default_locale="zh-Hans", default_timezone="Asia/Shanghai",
-            unit_system=UnitSystem.METRIC, subdivision_label="省份",
-            postal_code_example="100000",
-        ),
-        Country(
-            code="HK", name_en="Hong Kong",
-            names={"zh-Hant": "香港"},
-            dialing_code="852", currency="HKD",
-            default_locale="zh-Hant", default_timezone="Asia/Hong_Kong",
-            unit_system=UnitSystem.METRIC, subdivision_label="地區",
-            postal_code_example=None,
-        ),
-        Country(
-            code="SG", name_en="Singapore",
-            names={"zh-Hant": "新加坡", "zh-Hans": "新加坡"},
-            dialing_code="65", currency="SGD",
-            default_locale="en", default_timezone="Asia/Singapore",
-            unit_system=UnitSystem.METRIC, subdivision_label="District",
-            postal_code_example="018956",
-        ),
-        Country(
-            code="MY", name_en="Malaysia",
-            names={"ms": "Malaysia", "zh-Hant": "馬來西亞"},
-            dialing_code="60", currency="MYR",
-            default_locale="ms", default_timezone="Asia/Kuala_Lumpur",
-            unit_system=UnitSystem.METRIC, subdivision_label="Negeri",
-            postal_code_example="50000",
-        ),
-        Country(
-            code="TH", name_en="Thailand",
-            names={"th": "ประเทศไทย", "zh-Hant": "泰國"},
-            dialing_code="66", currency="THB",
-            default_locale="th", default_timezone="Asia/Bangkok",
-            unit_system=UnitSystem.METRIC, subdivision_label="จังหวัด",
-            postal_code_example="10200",
-        ),
-        Country(
-            code="VN", name_en="Vietnam",
-            names={"vi": "Việt Nam", "zh-Hant": "越南"},
-            dialing_code="84", currency="VND",
-            default_locale="vi", default_timezone="Asia/Ho_Chi_Minh",
-            unit_system=UnitSystem.METRIC, subdivision_label="Tỉnh",
-            postal_code_example="100000",
-        ),
-        Country(
-            code="PH", name_en="Philippines",
-            names={"en": "Philippines", "zh-Hant": "菲律賓"},
-            dialing_code="63", currency="PHP",
-            default_locale="en", default_timezone="Asia/Manila",
-            unit_system=UnitSystem.METRIC, subdivision_label="Province",
-            postal_code_example="1000",
-        ),
-        Country(
-            code="ID", name_en="Indonesia",
-            names={"id": "Indonesia", "zh-Hant": "印尼"},
-            dialing_code="62", currency="IDR",
-            default_locale="id", default_timezone="Asia/Jakarta",
-            unit_system=UnitSystem.METRIC, subdivision_label="Provinsi",
-            postal_code_example="10110",
-        ),
-        Country(
-            code="US", name_en="United States",
-            names={"en": "United States", "zh-Hant": "美國"},
-            dialing_code="1", currency="USD",
-            default_locale="en", default_timezone="America/New_York",
-            # 農產品在美國以磅計價，這是「不只台灣會用」最實際的一個差異
-            unit_system=UnitSystem.IMPERIAL, subdivision_label="State",
-            postal_code_example="10001",
-        ),
+        subdivision_label=_subdivision_label(code, tops),
+        subdivision_label_level2=_label_from_types(seconds),
+        postal_code_example=_POSTAL_EXAMPLES.get(code),
+        subdivision_count=len(tops),
+        subdivision_count_level2=len(seconds),
+    )
+
+
+class _CountryRegistry:
+    """行為像 dict 的國家目錄，但內容是依需求從標準資料建出來的。
+
+    保留 dict 介面是為了讓 `sorted(COUNTRIES)`、`code in COUNTRIES`
+    這類既有寫法繼續可用。
+    """
+
+    def __getitem__(self, code: str) -> Country:
+        country = _build_country(code.upper())
+        if country is None:
+            raise KeyError(code)
+        return country
+
+    def get(self, code: str, default: Country | None = None) -> Country | None:
+        try:
+            return self[code]
+        except (KeyError, AttributeError):
+            return default
+
+    def __contains__(self, code: object) -> bool:
+        return isinstance(code, str) and _build_country(code.upper()) is not None
+
+    def __iter__(self):
+        return iter(country_codes())
+
+    def __len__(self) -> int:
+        return len(country_codes())
+
+    def values(self):
+        return [self[c] for c in country_codes()]
+
+    def items(self):
+        return [(c, self[c]) for c in country_codes()]
+
+
+COUNTRIES = _CountryRegistry()
+
+
+@lru_cache(maxsize=1)
+def country_codes() -> tuple[str, ...]:
+    """所有支援的國家代碼（有國際電話碼的）。"""
+    codes = [
+        c.alpha_2 for c in pycountry.countries
+        if _build_country(c.alpha_2) is not None
     ]
-}
-
-
-# ---------------------------------------------------------------------------
-# 一級行政區（ISO 3166-2）
-# ---------------------------------------------------------------------------
-
-_TW = [
-    ("TW-CHA", "Changhua", "彰化縣"), ("TW-CYI", "Chiayi City", "嘉義市"),
-    ("TW-CYQ", "Chiayi County", "嘉義縣"), ("TW-HSQ", "Hsinchu County", "新竹縣"),
-    ("TW-HSZ", "Hsinchu City", "新竹市"), ("TW-HUA", "Hualien", "花蓮縣"),
-    ("TW-ILA", "Yilan", "宜蘭縣"), ("TW-KEE", "Keelung", "基隆市"),
-    ("TW-KHH", "Kaohsiung", "高雄市"), ("TW-KIN", "Kinmen", "金門縣"),
-    ("TW-LIE", "Lienchiang", "連江縣"), ("TW-MIA", "Miaoli", "苗栗縣"),
-    ("TW-NAN", "Nantou", "南投縣"), ("TW-NWT", "New Taipei", "新北市"),
-    ("TW-PEN", "Penghu", "澎湖縣"), ("TW-PIF", "Pingtung", "屏東縣"),
-    ("TW-TAO", "Taoyuan", "桃園市"), ("TW-TNN", "Tainan", "臺南市"),
-    ("TW-TPE", "Taipei", "臺北市"), ("TW-TTT", "Taitung", "臺東縣"),
-    ("TW-TXG", "Taichung", "臺中市"), ("TW-YUN", "Yunlin", "雲林縣"),
-]
-
-_JP = [
-    ("JP-01", "Hokkaido", "北海道"), ("JP-02", "Aomori", "青森県"),
-    ("JP-03", "Iwate", "岩手県"), ("JP-04", "Miyagi", "宮城県"),
-    ("JP-05", "Akita", "秋田県"), ("JP-06", "Yamagata", "山形県"),
-    ("JP-07", "Fukushima", "福島県"), ("JP-08", "Ibaraki", "茨城県"),
-    ("JP-09", "Tochigi", "栃木県"), ("JP-10", "Gunma", "群馬県"),
-    ("JP-11", "Saitama", "埼玉県"), ("JP-12", "Chiba", "千葉県"),
-    ("JP-13", "Tokyo", "東京都"), ("JP-14", "Kanagawa", "神奈川県"),
-    ("JP-15", "Niigata", "新潟県"), ("JP-16", "Toyama", "富山県"),
-    ("JP-17", "Ishikawa", "石川県"), ("JP-18", "Fukui", "福井県"),
-    ("JP-19", "Yamanashi", "山梨県"), ("JP-20", "Nagano", "長野県"),
-    ("JP-21", "Gifu", "岐阜県"), ("JP-22", "Shizuoka", "静岡県"),
-    ("JP-23", "Aichi", "愛知県"), ("JP-24", "Mie", "三重県"),
-    ("JP-25", "Shiga", "滋賀県"), ("JP-26", "Kyoto", "京都府"),
-    ("JP-27", "Osaka", "大阪府"), ("JP-28", "Hyogo", "兵庫県"),
-    ("JP-29", "Nara", "奈良県"), ("JP-30", "Wakayama", "和歌山県"),
-    ("JP-31", "Tottori", "鳥取県"), ("JP-32", "Shimane", "島根県"),
-    ("JP-33", "Okayama", "岡山県"), ("JP-34", "Hiroshima", "広島県"),
-    ("JP-35", "Yamaguchi", "山口県"), ("JP-36", "Tokushima", "徳島県"),
-    ("JP-37", "Kagawa", "香川県"), ("JP-38", "Ehime", "愛媛県"),
-    ("JP-39", "Kochi", "高知県"), ("JP-40", "Fukuoka", "福岡県"),
-    ("JP-41", "Saga", "佐賀県"), ("JP-42", "Nagasaki", "長崎県"),
-    ("JP-43", "Kumamoto", "熊本県"), ("JP-44", "Oita", "大分県"),
-    ("JP-45", "Miyazaki", "宮崎県"), ("JP-46", "Kagoshima", "鹿児島県"),
-    ("JP-47", "Okinawa", "沖縄県"),
-]
-
-SUBDIVISIONS: dict[str, list[Subdivision]] = {
-    "TW": [Subdivision(code=c, name_en=en, names={"zh-Hant": zh}) for c, en, zh in _TW],
-    "JP": [Subdivision(code=c, name_en=en, names={"ja": ja}) for c, en, ja in _JP],
-}
+    return tuple(sorted(codes))
 
 
 # ---------------------------------------------------------------------------
@@ -255,35 +404,59 @@ SUBDIVISIONS: dict[str, list[Subdivision]] = {
 # ---------------------------------------------------------------------------
 
 
-def is_supported_country(code: str | None) -> bool:
-    return bool(code) and code.upper() in COUNTRIES  # type: ignore[union-attr]
-
-
 def get_country(code: str | None) -> Country | None:
     if not code:
         return None
-    return COUNTRIES.get(code.upper())
+    return _build_country(code.strip().upper())
 
 
-def list_countries() -> list[Country]:
-    """依英文名排序，前端下拉選單直接用。"""
-    return sorted(COUNTRIES.values(), key=lambda c: c.name_en)
+def is_supported_country(code: str | None) -> bool:
+    return get_country(code) is not None
 
 
-def list_subdivisions(country_code: str) -> list[Subdivision]:
-    """沒有收錄的國家回空清單，呼叫端應改用自由輸入的 locality。"""
-    return SUBDIVISIONS.get(country_code.upper(), [])
+def list_countries(locale: str = "en") -> list[Country]:
+    """依在地化名稱排序，前端下拉選單直接用。"""
+    countries = [_build_country(c) for c in country_codes()]
+    resolved = [c for c in countries if c is not None]
+    return sorted(resolved, key=lambda c: c.display_name(locale))
 
 
-@lru_cache(maxsize=1)
-def _subdivision_index() -> dict[str, Subdivision]:
-    return {s.code: s for subs in SUBDIVISIONS.values() for s in subs}
+def list_subdivisions(
+    country_code: str, *, parent: str | None = None, level: int | None = None
+) -> list[Subdivision]:
+    """列出行政區。
+
+    預設只回第一層。烏干達這種「第一層是 4 個大區、實際要用的 district
+    在第二層」的國家，前端可以用 `parent=UG-E` 往下鑽，
+    或用 `level=2` 一次取得全部 district。
+    """
+    subs = _subdivisions_of(country_code.strip().upper())
+    if parent:
+        wanted = parent.strip().upper()
+        return [s for s in subs if s.parent_code == wanted]
+    if level is not None:
+        return [s for s in subs if s.level == level]
+    return [s for s in subs if s.level == 1]
+
+
+def subdivision_children(code: str) -> list[Subdivision]:
+    sub = lookup_subdivision(code)
+    if sub is None:
+        return []
+    return list_subdivisions(sub.country_code, parent=sub.code)
 
 
 def lookup_subdivision(code: str | None) -> Subdivision | None:
     if not code:
         return None
-    return _subdivision_index().get(code.upper())
+    normalized = code.strip().upper()
+    country = normalized.split("-")[0]
+    if len(country) != 2:
+        return None
+    for s in _subdivisions_of(country):
+        if s.code == normalized:
+            return s
+    return None
 
 
 def normalize_subdivision_code(code: str | None) -> str | None:
@@ -310,3 +483,8 @@ def default_timezone(country_code: str | None) -> str:
 def default_unit_system(country_code: str | None) -> UnitSystem:
     country = get_country(country_code)
     return country.unit_system if country else UnitSystem.METRIC
+
+
+def default_locale(country_code: str | None) -> str:
+    country = get_country(country_code)
+    return country.default_locale if country else "en"

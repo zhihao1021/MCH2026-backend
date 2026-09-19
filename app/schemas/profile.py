@@ -22,6 +22,7 @@ from app.data.countries import (
     get_country,
     list_subdivisions,
     lookup_subdivision,
+    subdivision_children,
 )
 from app.models.enums import LocationVisibility, UnitSystem, UserRole
 from app.models.user import User
@@ -32,6 +33,11 @@ SUBDIVISION_PATTERN = re.compile(r"^[A-Z]{2}-[A-Z0-9]{1,3}$")
 # `approximate` 模式下座標保留的小數位數。2 位約等於 1.1 公里，
 # 足以看出「在哪個區」但無法定位到門牌。
 _APPROX_DIGITS = 2
+
+# 地址由大到小書寫的國家（國 → 省 → 市 → 街）。其餘一律由小到大。
+# CLDR 沒有收錄地址書寫順序，所以只能維護這份清單；漏掉某個國家的
+# 後果只是排列順序不符當地習慣，不會出錯。
+_BIG_TO_SMALL_ADDRESS = frozenset({"TW", "JP", "CN", "KR", "HK", "MO", "HU", "VN"})
 
 
 def _valid_timezones() -> set[str]:
@@ -44,13 +50,28 @@ def _valid_timezones() -> set[str]:
 
 
 class SubdivisionOut(BaseModel):
-    code: str = Field(description="ISO 3166-2，例如 TW-YUN")
+    code: str = Field(description="ISO 3166-2，例如 TW-YUN、UG-E、UG-203")
     name: str = Field(description="已依請求語系解析好的名稱")
-    name_en: str
+    name_en: str = Field(description="ISO 的羅馬字名稱")
+    type: str = Field(description="ISO 的類型，例如 County / District / Region")
+    level: int = Field(description="1 = 一級行政區，2 = 其下一層")
+    parent_code: str | None = Field(
+        default=None, description="level=2 時指向所屬的一級行政區"
+    )
+    # 這一區底下還有沒有下一層，前端據此決定要不要再顯示一個選單
+    has_children: bool = False
 
     @classmethod
     def from_data(cls, s: Subdivision, locale: str) -> "SubdivisionOut":
-        return cls(code=s.code, name=s.display_name(locale), name_en=s.name_en)
+        return cls(
+            code=s.code,
+            name=s.display_name(locale),
+            name_en=s.name,
+            type=s.type,
+            level=s.level,
+            parent_code=s.parent_code,
+            has_children=bool(s.level == 1 and subdivision_children(s.code)),
+        )
 
 
 class CountryOut(BaseModel):
@@ -64,8 +85,15 @@ class CountryOut(BaseModel):
     unit_system: UnitSystem
     # 一級行政區在該國叫什麼，直接當表單標籤用
     subdivision_label: str
+    subdivision_count: int = 0
+    # 有第二層的國家（例如烏干達：4 個 Region 底下有 135 個 District）
+    # 才有值。前端據此決定要不要顯示第二個下拉選單
+    subdivision_label_level2: str | None = None
+    subdivision_count_level2: int = 0
+    has_second_level: bool = False
     postal_code_example: str | None = None
-    # False 代表這個國家還沒收錄行政區清單，前端請改用自由輸入的 locality
+    # False 代表 ISO 3166-2 沒有收錄這個國家的行政區（多是小島），
+    # 前端請改用自由輸入的 locality
     has_subdivision_data: bool
 
     @classmethod
@@ -80,8 +108,12 @@ class CountryOut(BaseModel):
             default_timezone=c.default_timezone,
             unit_system=c.unit_system,
             subdivision_label=c.subdivision_label,
+            subdivision_count=c.subdivision_count,
+            subdivision_label_level2=c.subdivision_label_level2,
+            subdivision_count_level2=c.subdivision_count_level2,
+            has_second_level=c.has_second_level,
             postal_code_example=c.postal_code_example,
-            has_subdivision_data=bool(list_subdivisions(c.code)),
+            has_subdivision_data=c.has_subdivision_data,
         )
 
 
@@ -164,11 +196,13 @@ class LocationIn(BaseModel):
                 raise ValueError(
                     f"subdivision_code {self.subdivision_code!r} 不屬於國家 {self.country_code!r}"
                 )
-            known = list_subdivisions(self.country_code)
-            if not known:
+            if not list_subdivisions(self.country_code):
                 raise ValueError(
-                    f"{self.country_code} 尚未收錄行政區清單，請改用自由輸入的 locality"
+                    f"ISO 3166-2 沒有收錄 {self.country_code} 的行政區，"
+                    "請改用自由輸入的 locality"
                 )
+            # 一級或二級都接受：烏干達這種國家實際要用的是第二層的 district，
+            # 強迫只能填第一層（4 個大區）等於沒有意義
             if lookup_subdivision(self.subdivision_code) is None:
                 raise ValueError(
                     f"{self.subdivision_code!r} 不在 {self.country_code} 的行政區清單中"
@@ -312,13 +346,19 @@ def format_address(
 
     parts: list[str] = [country_name]
     if sub:
+        # 選的是第二層（例如烏干達的 district）時，把上一層的大區也補進去，
+        # 否則地址會從國家直接跳到一個沒有上下文的地名
+        if sub.parent_code:
+            parent = lookup_subdivision(sub.parent_code)
+            if parent is not None:
+                parts.append(parent.display_name(locale))
         parts.append(sub.display_name(locale))
     if user.locality:
         parts.append(user.locality)
     if full and user.address_line:
         parts.append(user.address_line)
 
-    big_to_small = user.country_code in {"TW", "JP", "CN", "KR", "HK"}
+    big_to_small = user.country_code in _BIG_TO_SMALL_ADDRESS
     if big_to_small:
         if full and user.postal_code:
             parts.insert(0, user.postal_code)

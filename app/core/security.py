@@ -4,21 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import jwt
+import phonenumbers
 
 from app.core.config import settings
 from app.core.errors import AppError, AuthError
-from app.data.countries import COUNTRIES, dialing_code
+from app.data.countries import is_supported_country
 
 TokenType = Literal["access", "refresh"]
-
-_NON_DIGIT = re.compile(r"[^\d+]")
 
 
 class InvalidPhoneError(AppError):
@@ -29,31 +27,41 @@ class InvalidPhoneError(AppError):
 def normalize_phone(raw: str, country_code: str | None = None) -> str:
     """把使用者輸入的號碼統一成 E.164（+886912345678）。
 
-    功能機鍵盤輸入容易帶入空白、破折號或前導 0，這裡一次吸收掉。
+    交給 libphonenumber（`phonenumbers`）處理，而不是自己寫規則：
+    各國的號碼長度、前導 0 要不要去掉、哪些前綴是行動電話，差異非常大，
+    自己維護一份規則表遲早會在某個國家上出錯。這樣任何國家都能用。
+
+    功能機鍵盤輸入容易帶入空白、破折號或括號，libphonenumber 會一併吸收。
     """
-    if not raw:
-        raise InvalidPhoneError("Phone number is required")
+    if not raw or not raw.strip():
+        raise InvalidPhoneError("請輸入電話號碼")
 
-    cleaned = _NON_DIGIT.sub("", raw.strip())
-    if cleaned.startswith("00"):
-        cleaned = "+" + cleaned[2:]
+    text = raw.strip()
+    # 00 是國際冠碼的另一種寫法，換成 + 讓 libphonenumber 認得
+    if text.startswith("00"):
+        text = "+" + text[2:]
 
-    if not cleaned.startswith("+"):
-        # 本地格式（0912345678）要補國碼，就得知道是哪一國。
-        # 沒收錄的國家並非不能用，只是必須自己帶 +886 這種完整前綴。
-        cc = (country_code or settings.default_country_code).upper()
-        dialing = dialing_code(cc)
-        if dialing is None:
+    region = None
+    if not text.startswith("+"):
+        # 本地格式（0912345678）要補國碼，就得知道是哪一國
+        region = (country_code or settings.default_country_code).upper()
+        if not is_supported_country(region):
             raise InvalidPhoneError(
-                f"尚未支援的國家代碼 {cc!r}，請改用 E.164 格式（+國碼開頭）輸入號碼",
-                details={"country_code": cc, "supported": sorted(COUNTRIES)},
+                f"無法辨識的國家代碼 {region!r}，請改用 E.164 格式（+國碼開頭）輸入號碼",
+                details={"country_code": region},
             )
-        cleaned = "+" + dialing + cleaned.lstrip("0")
 
-    digits = cleaned[1:]
-    if not digits.isdigit() or not 7 <= len(digits) <= 15:
-        raise InvalidPhoneError("Phone number must contain 7-15 digits in E.164 form")
-    return "+" + digits
+    try:
+        parsed = phonenumbers.parse(text, region)
+    except phonenumbers.NumberParseException as exc:
+        raise InvalidPhoneError(
+            "電話號碼格式不正確", details={"reason": exc.error_type}
+        ) from exc
+
+    if not phonenumbers.is_valid_number(parsed):
+        raise InvalidPhoneError("這不是一個有效的電話號碼")
+
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
 def mask_phone(phone: str) -> str:

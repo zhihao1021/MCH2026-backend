@@ -4,6 +4,18 @@
 
 可重複執行：已存在的 slug 會跳過，只補上缺少的名稱與別名。
 
+## 收錄範圍
+
+**只收農作物**：蔬菜、水果、花卉、穀物。
+
+畜產（雞蛋、肉品）與漁產不在這個 App 的範圍內——它們的產銷結構與
+交易單位跟作物差很多（計價單位、分級、交易所），硬塞進同一套品項模型
+只會讓對照與單位換算變得沒辦法維護。`ProductCategory` 仍保留
+`livestock` / `fishery` 兩個值，將來真的要做時不必改 schema。
+
+花卉留著：它是園藝作物，也在 MOA 的農產品交易行情裡，
+`popularity` 壓低避免洗版即可。
+
 ## 命名原則
 
 - `zh-Hant` 的主要名稱用一般人講的說法（高麗菜），別名放官方/學名/俗名
@@ -39,7 +51,6 @@ V = ProductCategory.VEGETABLE
 F = ProductCategory.FRUIT
 L = ProductCategory.FLOWER
 G = ProductCategory.GRAIN
-A = ProductCategory.LIVESTOCK
 
 # (slug, 分類, 單位, 熱門度, [(locale, 名稱, 是否為主要名稱)])
 SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] = [
@@ -59,7 +70,7 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ]),
     ("tomato", V, "kg", 95, [
         ("zh-Hant", "番茄", True), ("zh-Hant", "牛番茄", False), ("zh-Hant", "西紅柿", False),
-        ("ja", "トマト", True), ("en", "Tomato", True),
+        ("ja", "トマト", True), ("en", "Tomato", True), ("en", "Tomatoes", False),
     ]),
     ("spinach", V, "kg", 70, [
         ("zh-Hant", "菠菜", True), ("ja", "ほうれん草", True), ("en", "Spinach", True),
@@ -74,6 +85,8 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ("potato", V, "kg", 82, [
         ("zh-Hant", "馬鈴薯", True), ("zh-Hant", "洋芋", False),
         ("ja", "じゃがいも", True), ("en", "Potato", True),
+        # 東非慣稱 Irish Potato，與 sweet potato 區分
+        ("en", "Irish Potato", False), ("en", "Potatoes - Irish", False),
     ]),
     ("cucumber", V, "kg", 72, [
         ("zh-Hant", "小黃瓜", True), ("zh-Hant", "花胡瓜", False),
@@ -87,10 +100,13 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ("banana", F, "kg", 92, [
         ("zh-Hant", "香蕉", True), ("zh-Hant", "芎蕉", False),
         ("ja", "バナナ", True), ("en", "Banana", True),
+        # 烏干達的鮮食蕉品種名。Matooke 是煮食蕉，另外開品項
+        ("en", "Apple Bananas", False), ("en", "Cavendish (Bogoya)", False),
     ]),
     ("pineapple", F, "kg", 86, [
         ("zh-Hant", "鳳梨", True), ("zh-Hant", "菠蘿", False),
         ("ja", "パイナップル", True), ("en", "Pineapple", True),
+        ("en", "Pineapples", False),
     ]),
     ("mango", F, "kg", 84, [
         ("zh-Hant", "芒果", True), ("zh-Hant", "檨仔", False),
@@ -98,6 +114,7 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ]),
     ("watermelon", F, "kg", 76, [
         ("zh-Hant", "西瓜", True), ("ja", "スイカ", True), ("en", "Watermelon", True),
+        ("en", "Water melon", False),
     ]),
     ("guava", F, "kg", 74, [
         ("zh-Hant", "芭樂", True), ("zh-Hant", "番石榴", False),
@@ -117,10 +134,6 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
         ("zh-Hant", "白米", True), ("zh-Hant", "稻米", False),
         ("ja", "米", True), ("en", "Rice", True),
     ]),
-    ("egg", A, "kg", 96, [
-        ("zh-Hant", "雞蛋", True), ("zh-Hant", "蛋", False),
-        ("ja", "鶏卵", True), ("en", "Chicken Egg", True),
-    ]),
 
     # =======================================================================
     # 以下依 MOA 實際交易量補進來的品項
@@ -129,6 +142,7 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     # ---- 瓜果菜類 ----
     ("pumpkin", V, "kg", 64, [
         ("zh-Hant", "南瓜", True), ("ja", "かぼちゃ", True), ("en", "Pumpkin", True),
+        ("en", "Pumpkins", False),
     ]),
     ("sweet-corn", V, "kg", 64, [
         ("zh-Hant", "玉米", True), ("ja", "とうもろこし", True), ("en", "Corn", True),
@@ -227,6 +241,7 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ("sweet-potato", V, "kg", 62, [
         ("zh-Hant", "甘薯", True), ("zh-Hant", "地瓜", False),
         ("ja", "さつまいも", True), ("en", "Sweet Potato", True),
+        ("en", "Potatoes - Sweet White", False), ("en", "Potatoes - Sweet Red", False),
     ]),
     ("taro", V, "kg", 52, [
         ("zh-Hant", "芋", True), ("zh-Hant", "芋頭", False),
@@ -281,6 +296,8 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ("peanut", V, "kg", 34, [
         ("zh-Hant", "落花生", True), ("zh-Hant", "花生", False),
         ("ja", "落花生", True), ("en", "Peanut", True),
+        # 非洲與英式英文慣稱 groundnut
+        ("en", "Groundnuts", False), ("en", "Groundnut", False),
     ]),
     ("sprouts", V, "kg", 36, [
         ("zh-Hant", "芽菜類", True), ("zh-Hant", "芽菜", False), ("en", "Sprouts", True),
@@ -332,7 +349,7 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
     ]),
     ("passion-fruit", F, "kg", 56, [
         ("zh-Hant", "百香果", True), ("ja", "パッションフルーツ", True),
-        ("en", "Passion Fruit", True),
+        ("en", "Passion Fruit", True), ("en", "Passion fruits", False),
     ]),
     ("muskmelon", F, "kg", 60, [
         ("zh-Hant", "洋香瓜", True), ("zh-Hant", "香瓜", False),
@@ -539,6 +556,87 @@ SEED: list[tuple[str, ProductCategory, str, int, list[tuple[str, str, bool]]]] =
         ("zh-Hant", "電信蘭葉", False), ("zh-Hant", "黃椰心葉", False),
         ("zh-Hant", "八角金盤", False),
         ("en", "Cut Foliage", True),
+    ]),
+    # =======================================================================
+    # 東非主食作物
+    #
+    # 接烏干達 NAMIS 時補進來的。這些在台灣市場沒有交易，但對非洲的
+    # 使用者是主食；品項清單是全球共用的，不該只長台灣看得到的東西。
+    #
+    # 注意：`maize` 與既有的 `sweet-corn` 是不同的東西——前者是曬乾的
+    # 粒玉米（主食、磨粉），後者是鮮食甜玉米。所以 maize 的中文主要名稱
+    # 刻意避開「玉米」，免得兩個品項在搜尋與自動對照上互相干擾。
+    #
+    # 穀物磨成粉之後是另一個價格層級（NAMIS 分開報），所以也分開建品項。
+    # =======================================================================
+    ("maize", G, "kg", 70, [
+        ("zh-Hant", "粒玉米", True), ("zh-Hant", "飼料玉米", False),
+        ("zh-Hant", "玉米粒", False),
+        ("en", "Maize", True), ("en", "Maize Grain", False),
+    ]),
+    ("maize-flour", G, "kg", 68, [
+        ("zh-Hant", "玉米粉", True),
+        ("en", "Maize Flour", True), ("en", "Posho", False),
+    ]),
+    ("millet", G, "kg", 58, [
+        ("zh-Hant", "小米", True), ("zh-Hant", "粟", False),
+        ("ja", "きび", True),
+        ("en", "Millet", True), ("en", "Millet Grain", False),
+        ("en", "Finger Millet", False),
+    ]),
+    ("millet-flour", G, "kg", 56, [
+        ("zh-Hant", "小米粉", True), ("en", "Millet Flour", True),
+    ]),
+    ("sorghum", G, "kg", 56, [
+        ("zh-Hant", "高粱", True), ("ja", "ソルガム", True),
+        ("en", "Sorghum", True), ("en", "Sorghum Grain", False),
+    ]),
+    ("sorghum-flour", G, "kg", 54, [
+        ("zh-Hant", "高粱粉", True), ("en", "Sorghum Flour", True),
+    ]),
+    ("cassava", V, "kg", 66, [
+        ("zh-Hant", "木薯", True), ("zh-Hant", "樹薯", False),
+        ("ja", "キャッサバ", True),
+        ("en", "Cassava", True), ("en", "Cassava - Fresh", False),
+    ]),
+    ("cassava-flour", G, "kg", 60, [
+        ("zh-Hant", "木薯粉", True), ("zh-Hant", "樹薯粉", False),
+        ("en", "Cassava Flour", True), ("en", "Cassava - Flour", False),
+    ]),
+    ("sesame", G, "kg", 52, [
+        ("zh-Hant", "芝麻", True), ("zh-Hant", "胡麻", False),
+        ("ja", "ごま", True),
+        # Simsim 是東非對芝麻的稱呼
+        ("en", "Sesame", True), ("en", "Simsim", False),
+    ]),
+    ("cooking-banana", F, "kg", 64, [
+        ("zh-Hant", "煮食蕉", True), ("zh-Hant", "大蕉", False),
+        ("ja", "料理用バナナ", True),
+        # Matooke 是東非高地煮食蕉，與鮮食的 banana 是不同商品
+        ("en", "Cooking Banana", True), ("en", "Matooke", False),
+        # NAMIS 用 "Matooke (kg)" 表示每公斤價；另一筆同名的是每串價，
+        # 單位在來源就標錯了，所以列在 automap 的排除清單裡
+        ("en", "Matooke (kg)", False), ("en", "Plantain", False),
+    ]),
+    # 曬乾的菜豆種子（Phaseolus vulgaris），與既有的 green-bean（鮮食豆莢）
+    # 和 yardlong-bean（豇豆，台灣稱菜豆）都是不同的交易品項。
+    # 中文主要名稱刻意用「乾豆」而不是「菜豆」，避免與 yardlong-bean 撞名。
+    # 日文名稱不填：不確定對應哪一個詞，填錯比不填糟。
+    ("common-bean", V, "kg", 62, [
+        ("zh-Hant", "乾豆", True), ("zh-Hant", "乾燥豆類", False),
+        ("zh-Hant", "腰豆", False),
+        ("en", "Common Bean", True), ("en", "Beans", False),
+        ("en", "Dry Beans", False), ("en", "Kidney Bean", False),
+    ]),
+    ("cowpea", V, "kg", 50, [
+        ("zh-Hant", "豇豆", True), ("ja", "ささげ", True),
+        ("en", "Cowpea", True), ("en", "Cow Peas", False),
+    ]),
+    ("soybean", V, "kg", 58, [
+        ("zh-Hant", "大豆", True), ("zh-Hant", "黃豆", False),
+        ("ja", "大豆", True),
+        ("en", "Soybean", True), ("en", "Soya", False),
+        ("en", "Beans - Soya", False),
     ]),
 ]
 

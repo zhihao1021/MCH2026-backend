@@ -70,7 +70,6 @@ TITLE_OVERRIDES: dict[str, str] = {
     "muskmelon": "Cantaloupe",
     "orange": "Orange (fruit)",
     "mixed-citrus": "Citrus",
-    "egg": "Egg as food",
     # 要用學名才找得到
     "wax-apple": "Syzygium samarangense",
     "chinese-chive": "Allium tuberosum",

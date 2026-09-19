@@ -45,9 +45,17 @@ async def list_regions(
     session: DbSession,
     country_code: Annotated[str | None, Query(description="ISO 3166-1 alpha-2")] = None,
 ) -> list[RegionOut]:
-    """有市場資料的地區與各自的市場數，給前端做「選地區」的選單。"""
+    """有市場資料的地區與各自的市場數，給前端做「選地區」的選單。
+
+    不分頁，直接回陣列。**依國家排序**，同一國的地區會排在一起；
+    每一筆都帶 `country_code`，因為不同國家可能有同名的地區。
+    不指定 `country_code` 就會回所有國家的地區。
+    """
     rows = await catalog_service.list_regions(session, country_code=country_code)
-    return [RegionOut(region=r, market_count=n) for r, n in rows]
+    return [
+        RegionOut(region=region, country_code=cc, market_count=n)
+        for region, cc, n in rows
+    ]
 
 
 # 這條要放在 /{market_id} 之前，否則 "regions" 會先被當成 UUID 解析而回 422

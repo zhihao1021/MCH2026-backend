@@ -701,6 +701,9 @@ GET /v1/users/{user_id}/quotes
 
 前端組位置表單時用的參考資料。**不要在前端寫死任何一份清單。**
 
+資料來自 ISO 3166 / CLDR / libphonenumber，涵蓋 242 個國家與 5046 個行政區，
+不是後端手工維護的名單。
+
 ### 6.1 支援的國家
 
 ```
@@ -726,10 +729,13 @@ GET /v1/geo/countries?locale=zh-Hant
 ```
 
 - `dialing_code`：登入畫面的國碼選擇器用
-- `subdivision_label`：**直接拿來當表單標籤**（台灣是「縣市」、日本是「都道府県」、美國是 "State"）
-- `has_subdivision_data`：`false` 代表這個國家還沒收錄行政區清單，
+- `subdivision_label`：**直接拿來當表單標籤**（台灣是「縣市」、日本是「都道府県」、
+  烏干達是 "Region"、美國是 "State"）
+- `has_second_level` / `subdivision_label_level2` / `subdivision_count_level2`：
+  行政區有兩層的國家才有意義，見 6.3
+- `has_subdivision_data`：`false` 代表 ISO 3166-2 沒有收錄這個國家的行政區，
   表單請改成自由輸入的 `locality` 文字框
-- 依 `name_en` 排序，可直接餵給下拉選單
+- **依請求語系的國名排序**，可直接餵給下拉選單
 
 ### 6.2 單一國家
 
@@ -752,9 +758,32 @@ GET /v1/geo/countries/{code}/subdivisions?locale=zh-Hant
 ]
 ```
 
+**Query 參數**：
+
+| 參數 | 說明 |
+| --- | --- |
+| `parent` | 只列這個一級行政區底下的下一層，例如 `parent=UG-E` |
+| `level` | `1` = 一級（預設）；`2` = 全國的第二層 |
+
+**回應欄位**：`code` / `name` / `name_en` / `type`（ISO 類型，如 County、District）/
+`level`（1 或 2）/ `parent_code` / `has_children`。
+
 - 代碼是 **ISO 3166-2**，可直接送給 `PUT /v1/me/location` 的 `subdivision_code`
-- 目前收錄台灣（22 筆）與日本（47 筆）
-- **回空陣列不是錯誤**，代表該國尚未收錄，請改用 `locality` 自由輸入
+- **一級或二級都可以填**。有些國家的一級太粗，例如烏干達的一級是 4 個 Region、
+  實際要用的是底下 135 個 District：
+
+  ```
+  GET /v1/geo/countries/UG/subdivisions
+  → [{"code":"UG-E","name":"Eastern","type":"Region","level":1,"has_children":true}, ...]
+
+  GET /v1/geo/countries/UG/subdivisions?parent=UG-E
+  → [{"code":"UG-203","name":"Iganga","type":"District","level":2,"parent_code":"UG-E"}, ...]
+  ```
+
+  `CountryOut.has_second_level` 為 `true` 時才需要顯示第二個下拉選單，
+  標籤用 `subdivision_label_level2`。
+- ISO 只提供羅馬字名稱；台灣與日本的行政區有補上中日文，其餘顯示羅馬字
+- **回空陣列不是錯誤**，代表 ISO 沒有收錄該國（多是小島），請改用 `locality` 自由輸入
 
 ---
 
@@ -1031,28 +1060,36 @@ GET /v1/markets/{market_id}
 GET /v1/markets/regions
 ```
 
-有市場資料的縣市與各自的市場數，給前端做「選地區」的下拉選單。
+有市場資料的地區與各自的市場數，給前端做「選地區」的下拉選單。
 不分頁，直接回陣列。
 
-**Query 參數**：`country_code`（選填）
+**Query 參數**：`country_code`（選填。不給就回**所有國家**的地區）
 
 ```json
 [
-  { "region": "台中市", "market_count": 4 },
-  { "region": "台北市", "market_count": 4 },
-  { "region": "彰化縣", "market_count": 2 },
-  { "region": "雲林縣", "market_count": 1 }
+  { "region": "台中市",  "country_code": "TW", "market_count": 4 },
+  { "region": "台北市",  "country_code": "TW", "market_count": 4 },
+  { "region": "彰化縣",  "country_code": "TW", "market_count": 2 },
+  { "region": "Iganga", "country_code": "UG", "market_count": 1 },
+  { "region": "Kampala","country_code": "UG", "market_count": 1 }
 ]
 ```
 
-依市場數由多到少排序。拿到的 `region` 可以直接丟給 `GET /v1/markets?region=…`。
+**排序是「先國家、再市場數由多到少」**，同一國的地區會排在一起。
+
+每一筆都帶 `country_code`：不同國家可能有同名的地區，而且前端要能依國家
+分組顯示。要單看一國就帶 `country_code=UG`。
+
+拿到的 `region` 可以直接丟給 `GET /v1/markets?region=…`
+（跨國同名時請一併帶 `country_code`）。
 
 > 台灣的縣市名稱用 `台` 不用 `臺`（與農業部回傳的市場名稱一致），
 > 前端做比對時請注意。
 >
-> 這個 `region` 是**市場所在的縣市字串**，與使用者個人檔案的
-> `subdivision_code`（ISO 3166-2，例如 `TW-YUN`）是兩回事：
-> 前者來自官方資料來源的原始欄位，後者是平台自己的標準化代碼。
+> 這個 `region` 是**市場所在地區的名稱字串**，內容由各資料來源決定：
+> 台灣是縣市（台中市）、烏干達是 district（Iganga、Kampala）。
+> 它與使用者個人檔案的 `subdivision_code`（ISO 3166-2，例如 `TW-YUN`）
+> 是兩回事——後者是平台自己的標準化代碼，前者是市場清單的顯示與篩選用字串。
 
 ---
 

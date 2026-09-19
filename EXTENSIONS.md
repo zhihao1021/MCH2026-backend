@@ -437,9 +437,28 @@ async def test_my_source_parses_sample():
 **Q：來源沒有市場的概念，是全國均價怎麼辦？**
 用一個固定的 `market_external_id`，例如 `"national"`，`market_name` 給「全國平均」。
 
-**Q：要抓的資料是 CSV / Excel，不是 JSON？**
+**Q：要抓的資料是 CSV / Excel / HTML 表格，不是 JSON？**
 沒差。`fetch_prices` 只要求你 yield `RawPrice`，中間用什麼解析都行。
 大檔案請用 `self.http.stream()` 邊下載邊解析。
+網頁解析可以用 `beautifulsoup4`（已在依賴裡），
+範例見 `app/extensions/ug_namis/`——烏干達 NAMIS 沒有 API，只有 HTML 表格。
+
+解析網頁時**不要靠「第幾個 table」定位**，站方加一個區塊就會整個錯位；
+改用標題文字或欄位特徵去找（`ug_namis` 的 `_find_table` 兩種都做了）。
+
+**Q：來源只有「最新」的資料，沒有日期也查不到歷史？**
+這種站台比想像中多（`ug_namis` 就是）。做法：
+
+1. `lookback_days=0`、`max_window_days=1`，別假裝抓得到歷史；
+2. `trade_date` 用**來源當地時區**的今天，不是伺服器的今天；
+3. 在 `fetch_prices` 開頭檢查 `window` 有沒有包含今天，沒有就直接
+   `return` 並記一行 warning——與其塞一個假日期，不如明白地讓那一段沒資料；
+4. `schedule` 設成一天跑好幾次。錯過一天就永遠補不回來，而重複抓是
+   冪等的（去重鍵相同，走 upsert），代價只有幾次請求。
+
+**Q：同一個市場同一天有兩種價格（批發 / 零售）怎麼存？**
+用 `grade` 區分，例如 `"wholesale"` / `"retail"`。去重鍵包含 `grade`，
+兩筆才不會互相覆蓋。`ug_namis` 就是這樣處理 NAMIS 的 W.P / R.P。
 
 **Q：一次要抓好幾年的歷史資料？**
 用 `POST /v1/admin/sources/{key}/sync?start=...&end=...`。框架會依
