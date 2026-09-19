@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError
+from app.data.countries import default_currency, lookup_subdivision
 from app.core.pagination import PageParams
 from app.models.catalog import Product
 from app.models.enums import QuoteSide, QuoteStatus, UserRole
@@ -50,7 +51,7 @@ async def create_quote(
     latitude: float | None = None,
     longitude: float | None = None,
     note: str | None = None,
-    contact_phone_public: bool = True,
+    contact_phone_public: bool | None = None,
     valid_hours: int | None = None,
 ) -> Quote:
     if not user.can_quote:
@@ -85,18 +86,21 @@ async def create_quote(
         role_snapshot=user.role,
         status=QuoteStatus.ACTIVE,
         price=price,
-        currency=(currency or _default_currency(user.country_code)).upper(),
+        currency=(currency or default_currency(user.country_code)).upper(),
         unit=unit or product.default_unit,
         grade=grade,
         quantity=quantity,
         min_order=min_order,
         country_code=user.country_code,
-        region=region or user.region,
+        # 沒指定就沿用個人檔案的所在地（行政區名優先，其次自由輸入的城鎮）
+        region=region or _user_region(user),
         location_text=location_text,
         latitude=latitude,
         longitude=longitude,
         note=note,
-        contact_phone_public=contact_phone_public,
+        contact_phone_public=(
+            user.contact_phone_public if contact_phone_public is None else contact_phone_public
+        ),
         valid_from=now,
         valid_until=now + timedelta(hours=ttl) if ttl > 0 else None,
     )
@@ -257,22 +261,13 @@ async def expire_stale_quotes(session: AsyncSession) -> int:
     return result.rowcount or 0
 
 
-# 各國預設幣別。查不到就用美元，讓報價至少能存下來而不是整個失敗。
-_CURRENCY_BY_COUNTRY = {
-    "TW": "TWD",
-    "JP": "JPY",
-    "KR": "KRW",
-    "CN": "CNY",
-    "HK": "HKD",
-    "SG": "SGD",
-    "MY": "MYR",
-    "TH": "THB",
-    "VN": "VND",
-    "PH": "PHP",
-    "ID": "IDR",
-    "US": "USD",
-}
+def _user_region(user: User) -> str | None:
+    """個人檔案的所在地，用來當報價地區的預設值。
 
-
-def _default_currency(country_code: str) -> str:
-    return _CURRENCY_BY_COUNTRY.get(country_code.upper(), "USD")
+    有 ISO 3166-2 代碼就用該行政區在使用者語系下的名稱，
+    沒有（該國尚未收錄清單）就退回自由輸入的 locality。
+    """
+    sub = lookup_subdivision(user.subdivision_code)
+    if sub is not None:
+        return sub.display_name(user.locale)
+    return user.locality

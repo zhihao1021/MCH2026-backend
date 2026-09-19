@@ -164,7 +164,7 @@ async def set_user_role(
     if user is None:
         raise NotFoundError("User not found", code="user_not_found")
     await auth_service.admin_set_role(session, user, payload.role, reason=payload.reason)
-    return UserOut.model_validate(user)
+    return UserOut.from_model(user)
 
 
 @router.get("/users", response_model=Page[UserOut], summary="使用者清單")
@@ -187,4 +187,4 @@ async def list_users(
 
     rows = list((await session.execute(stmt.limit(paging.limit).offset(paging.offset))).scalars())
     total = (await session.scalar(count_stmt)) or 0
-    return Page.build([UserOut.model_validate(u) for u in rows], total, paging)
+    return Page.build([UserOut.from_model(u) for u in rows], total, paging)

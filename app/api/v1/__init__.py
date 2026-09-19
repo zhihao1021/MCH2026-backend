@@ -2,11 +2,13 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import admin, auth, markets, products, quotes, sources, users
+from app.api.v1 import admin, auth, geo, markets, products, quotes, sources, users
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
+api_router.include_router(users.public_router)
+api_router.include_router(geo.router)
 api_router.include_router(products.router)
 api_router.include_router(markets.router)
 api_router.include_router(quotes.router)

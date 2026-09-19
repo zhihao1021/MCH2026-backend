@@ -91,16 +91,20 @@ users ── quotes ────────────────────
 | `product_source_mappings` | 來源代碼 → 標準品項；未對應的也照收，之後補 |
 | `official_prices` | 官方行情。(來源, 市場, 代碼, 交易日, 等級) 唯一，重跑走 upsert |
 | `ingest_runs` | 每次抓取的執行紀錄 |
-| `users` / `otp_codes` / `refresh_tokens` | 手機 OTP 登入 |
+| `users` / `otp_codes` / `refresh_tokens` | 手機 OTP 登入、個人檔案與所在位置 |
 | `quotes` | 小農 / 盤商報價 |
 
-設計上的兩個關鍵決定：
+設計上的三個關鍵決定：
 
 - **`products` 與來源代碼分離。** 各國代碼系統完全不同，靠
   `product_source_mappings` 轉一層，同一個「高麗菜」才能同時掛上
   台灣的 `11` 與日本的某個代碼。
 - **沒對應到品項的價格照樣入庫**（`official_prices.product_id` 可為 NULL）。
   資料先收下來，對照之後再補並回填，比起丟掉資料要好。
+- **位置拆成「ISO 代碼 + 自由文字」兩層。** 有收錄行政區清單的國家用
+  ISO 3166-2 的 `subdivision_code`，沒收錄的只填自由輸入的 `locality`。
+  新增一個國家只要在 `app/data/countries.py` 加一筆，不必改結構，
+  也不會被某一國的行政區劃綁死。
 
 ---
 
@@ -140,6 +144,10 @@ users ── quotes ────────────────────
 | GET | `/markets` | 市場清單 |
 | GET | `/quotes` | 瀏覽報價，可依品項 / 買賣別 / 身分 / 地區篩選 |
 | GET | `/sources` | 資料來源與載入狀態 |
+| GET | `/users/{id}` | 公開個人檔案（位置依對方的公開程度揭露） |
+| GET | `/users/{id}/quotes` | 某人目前有效的報價 |
+| GET | `/geo/countries` | 支援的國家＋撥號碼 / 幣別 / 時區 / 度量衡 |
+| GET | `/geo/countries/{code}/subdivisions` | 一級行政區（ISO 3166-2） |
 
 ### 報價（需登入）
 
@@ -148,11 +156,23 @@ users ── quotes ────────────────────
 | POST | `/quotes` | 新增。需 `farmer` 或 `trader` 身分 |
 | PATCH | `/quotes/{id}` | 修改自己的報價 |
 | DELETE | `/quotes/{id}` | 下架（軟刪除，狀態轉 `withdrawn`） |
-| GET | `/me` / PATCH `/me` | 個人資料（暱稱 / 地區 / 語系）。**不能改身分** |
+| GET | `/me` / PATCH `/me` | 個人檔案（暱稱 / 商號 / 簡介 / 語系 / 幣別）。**不能改身分或位置** |
+| GET,PUT,DELETE | `/me/location` | 登記所在位置。PUT 是整筆取代 |
 | GET | `/me/quotes` | 我的報價（含已下架） |
 
 報價預設 48 小時後過期，排程每 10 分鐘把過期的轉成 `expired`。
-報價者可選擇是否公開電話；不公開時其他人只看得到遮罩後的號碼。
+報價者可選擇是否公開電話（預設沿用個人檔案的設定）；不公開時其他人只看得到遮罩後的號碼。
+
+### 多國支援
+
+國家相關的常數集中在 `app/data/countries.py`：撥號碼、幣別、預設時區與語系、
+度量衡制（美國農產品以磅計價，其餘公制），以及一級行政區清單。
+目前收錄 12 個國家，行政區清單有台灣（22 縣市）與日本（47 都道府県）；
+其餘國家 `has_subdivision_data` 為 `false`，改用自由輸入的城鎮名稱。
+**新增一個國家只要在該檔加一筆，不需要改任何程式邏輯。**
+
+位置的公開程度由使用者自己決定（`exact` / `approximate` / `region` / `private`），
+預設 `region`——只到行政區，不給座標與街道地址。
 
 ### 維運（需 `X-Admin-Token`）
 

@@ -14,24 +14,9 @@ import jwt
 
 from app.core.config import settings
 from app.core.errors import AppError, AuthError
+from app.data.countries import COUNTRIES, dialing_code
 
 TokenType = Literal["access", "refresh"]
-
-# 各國國碼預設值：使用者只輸入本地號碼時用來補 +886 / +81 之類的前綴
-_DIALING_CODES: dict[str, str] = {
-    "TW": "886",
-    "JP": "81",
-    "KR": "82",
-    "CN": "86",
-    "HK": "852",
-    "SG": "65",
-    "MY": "60",
-    "TH": "66",
-    "VN": "84",
-    "PH": "63",
-    "ID": "62",
-    "US": "1",
-}
 
 _NON_DIGIT = re.compile(r"[^\d+]")
 
@@ -54,12 +39,14 @@ def normalize_phone(raw: str, country_code: str | None = None) -> str:
         cleaned = "+" + cleaned[2:]
 
     if not cleaned.startswith("+"):
+        # 本地格式（0912345678）要補國碼，就得知道是哪一國。
+        # 沒收錄的國家並非不能用，只是必須自己帶 +886 這種完整前綴。
         cc = (country_code or settings.default_country_code).upper()
-        dialing = _DIALING_CODES.get(cc)
+        dialing = dialing_code(cc)
         if dialing is None:
             raise InvalidPhoneError(
-                f"Unknown country code {cc!r}; provide the number in E.164 form",
-                details={"country_code": cc},
+                f"尚未支援的國家代碼 {cc!r}，請改用 E.164 格式（+國碼開頭）輸入號碼",
+                details={"country_code": cc, "supported": sorted(COUNTRIES)},
             )
         cleaned = "+" + dialing + cleaned.lstrip("0")
 

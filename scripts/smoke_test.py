@@ -190,9 +190,10 @@ class Smoke:
         auth_hdr = {"Authorization": f"Bearer {tokens['access_token']}"}
         r = self.req("PATCH", "/me", headers=auth_hdr, json={"role": "trader"})
         self.check("PATCH /me 不接受 role", r.status_code == 422, r.text[:160])
-        r = self.req("PATCH", "/me", headers=auth_hdr, json={"region": "雲林縣"})
-        self.check("PATCH /me 可改地區且身分不變",
-                   r.status_code == 200 and r.json()["role"] == "farmer", r.text[:160])
+        r = self.req("PATCH", "/me", headers=auth_hdr, json={"business_name": "阿明果園"})
+        self.check("PATCH /me 可改個人檔案且身分不變",
+                   r.status_code == 200 and r.json()["role"] == "farmer"
+                   and r.json()["business_name"] == "阿明果園", r.text[:160])
 
         # refresh 旋轉
         r3 = self.req("POST", "/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
@@ -201,6 +202,162 @@ class Smoke:
         self.check("舊 refresh token 不能重用", reused.status_code == 401, reused.text[:160])
 
         return r3.json()["access_token"] if r3.status_code == 200 else tokens["access_token"]
+
+    def geo(self) -> None:
+        print("\n[6b] 國家 / 行政區參考資料")
+        r = self.req("GET", "/geo/countries?locale=zh-Hant")
+        countries = r.json() if r.status_code == 200 else []
+        codes = [c["code"] for c in countries]
+        self.check("GET /geo/countries", r.status_code == 200, f"{len(codes)} 國")
+        self.check("包含台灣與日本", {"TW", "JP"} <= set(codes), str(codes))
+
+        tw = next((c for c in countries if c["code"] == "TW"), {})
+        self.check("國家帶出撥號碼與幣別",
+                   tw.get("dialing_code") == "886" and tw.get("currency") == "TWD", str(tw))
+        us = next((c for c in countries if c["code"] == "US"), {})
+        self.check("美國為英制", us.get("unit_system") == "imperial", str(us.get("unit_system")))
+        self.check("未收錄行政區的國家有標記",
+                   us.get("has_subdivision_data") is False, str(us.get("has_subdivision_data")))
+
+        r = self.req("GET", "/geo/countries/TW/subdivisions?locale=zh-Hant")
+        subs = r.json() if r.status_code == 200 else []
+        self.check("GET 台灣行政區", r.status_code == 200 and len(subs) == 22, f"{len(subs)} 筆")
+        self.check("行政區用 ISO 3166-2 代碼",
+                   any(s["code"] == "TW-YUN" and s["name"] == "雲林縣" for s in subs))
+
+        r = self.req("GET", "/geo/countries/JP/subdivisions?locale=ja")
+        subs = r.json() if r.status_code == 200 else []
+        self.check("GET 日本都道府県", r.status_code == 200 and len(subs) == 47, f"{len(subs)} 筆")
+
+        r = self.req("GET", "/geo/countries/US/subdivisions")
+        self.check("未收錄的國家回空陣列而非錯誤",
+                   r.status_code == 200 and r.json() == [], r.text[:120])
+        r = self.req("GET", "/geo/countries/ZZ")
+        self.check("未支援的國家回 404", r.status_code == 404, r.text[:120])
+
+    def profile_and_location(self, token: str) -> None:
+        print("\n[6c] 個人檔案與位置")
+        auth = {"Authorization": f"Bearer {token}"}
+
+        r = self.req("GET", "/me", headers=auth)
+        me = r.json() if r.status_code == 200 else {}
+        self.check("GET /me 帶出位置區塊", "location" in me, str(list(me))[:160])
+        self.check("尚未登記位置", me.get("has_location") is False, str(me.get("has_location")))
+        self.check("幣別依國家推導", me.get("currency") == "TWD", str(me.get("currency")))
+
+        r = self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "TW",
+            "subdivision_code": "TW-YUN",
+            "locality": "西螺鎮",
+            "address_line": "延平路 100 號",
+            "postal_code": "648",
+            "latitude": 23.797512,
+            "longitude": 120.465843,
+            "visibility": "region",
+        })
+        body = r.json() if r.status_code == 200 else {}
+        self.check("PUT /me/location", r.status_code == 200, r.text[:200])
+        loc = body.get("location", {})
+        self.check("位置已登記", body.get("has_location") is True)
+        self.check("行政區名稱已解析", loc.get("subdivision_name") == "雲林縣", str(loc)[:160])
+        self.check("時區依國家補上", loc.get("timezone") == "Asia/Taipei", str(loc.get("timezone")))
+        self.check("地址由大到小組好",
+                   loc.get("formatted") == "648 臺灣 雲林縣 西螺鎮 延平路 100 號",
+                   str(loc.get("formatted")))
+
+        r = self.req("PUT", "/me/location", headers=auth,
+                     json={"country_code": "JP", "subdivision_code": "TW-YUN"})
+        self.check("行政區不屬於該國被拒", r.status_code == 422, r.text[:160])
+        r = self.req("PUT", "/me/location", headers=auth, json={"country_code": "ZZ"})
+        self.check("未支援的國家被拒", r.status_code == 422, r.text[:160])
+        r = self.req("PUT", "/me/location", headers=auth,
+                     json={"country_code": "TW", "latitude": 23.7})
+        self.check("經緯度未成對被拒", r.status_code == 422, r.text[:160])
+
+        r = self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "US", "locality": "Fresno, CA", "postal_code": "93721",
+        })
+        us_body = r.json() if r.status_code == 200 else {}
+        us_loc = us_body.get("location", {})
+        self.check("未收錄行政區的國家可用 locality 登記", r.status_code == 200, r.text[:200])
+        # 順序是小到大（歐美慣例），國名用的是「使用者自己的語系」，
+        # 所以 zh-Hant 的使用者看到的是「美國」而不是 United States
+        self.check("美國地址由小到大",
+                   us_loc.get("formatted") == "Fresno, CA, 93721, 美國",
+                   str(us_loc.get("formatted")))
+        self.check("換國家後幣別跟著變", us_body.get("currency") == "USD",
+                   str(us_body.get("currency")))
+        self.check("換國家後單位制跟著變",
+                   us_body.get("effective_unit_system") == "imperial",
+                   str(us_body.get("effective_unit_system")))
+        self.check("換國家會清掉舊的行政區代碼",
+                   us_loc.get("subdivision_code") is None, str(us_loc.get("subdivision_code")))
+
+        user_id = me.get("id")
+
+        self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "TW", "subdivision_code": "TW-YUN", "locality": "西螺鎮",
+            "visibility": "region",
+        })
+        r = self.req("GET", "/me/location", headers=auth)
+        self.check("GET /me/location", r.status_code == 200, r.text[:160])
+
+        r = self.req("GET", f"/users/{user_id}")
+        pub = r.json() if r.status_code == 200 else {}
+        self.check("GET /users/{id}", r.status_code == 200, r.text[:200])
+        self.check("公開檔案不含電話", "phone" not in pub, str(list(pub))[:160])
+        self.check("region 層級不給座標",
+                   pub.get("location", {}).get("latitude") is None
+                   and pub.get("location", {}).get("precision") == "hidden",
+                   str(pub.get("location"))[:160])
+
+        self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "TW", "subdivision_code": "TW-YUN", "visibility": "private",
+        })
+        pub = self.req("GET", f"/users/{user_id}").json()
+        self.check("private 只露出國家",
+                   pub["location"]["subdivision_code"] is None
+                   and pub["location"]["formatted"] == "臺灣", str(pub["location"])[:160])
+
+        self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "TW", "subdivision_code": "TW-YUN", "locality": "西螺鎮",
+            "latitude": 23.797512, "longitude": 120.465843, "visibility": "approximate",
+        })
+        pub = self.req("GET", f"/users/{user_id}").json()
+        self.check("approximate 給模糊座標",
+                   pub["location"]["latitude"] == 23.8
+                   and pub["location"]["precision"] == "approximate_1km",
+                   str(pub["location"])[:160])
+        self.check("approximate 不給街道地址", pub["location"]["address_line"] is None)
+
+        r = self.req("GET", f"/users/{user_id}/quotes")
+        self.check("GET /users/{id}/quotes", r.status_code == 200, r.text[:160])
+        r = self.req("GET", "/users/00000000-0000-0000-0000-000000000000")
+        self.check("不存在的使用者回 404", r.status_code == 404, r.text[:120])
+
+        r = self.req("PATCH", "/me", headers=auth, json={
+            "bio": "種了 20 年的西螺米", "website_url": "https://example.org/farm",
+            "preferred_currency": "jpy",
+        })
+        body = r.json() if r.status_code == 200 else {}
+        self.check("PATCH /me 個人檔案", r.status_code == 200, r.text[:200])
+        self.check("幣別轉大寫", body.get("preferred_currency") == "JPY",
+                   str(body.get("preferred_currency")))
+        self.check("明確設定的幣別優先於國家預設", body.get("currency") == "JPY",
+                   str(body.get("currency")))
+
+        r = self.req("PATCH", "/me", headers=auth, json={"website_url": "javascript:alert(1)"})
+        self.check("非 http 網址被拒", r.status_code == 422, r.text[:160])
+
+        self.req("PATCH", "/me", headers=auth, json={"preferred_currency": None})
+        self.req("PUT", "/me/location", headers=auth, json={
+            "country_code": "TW", "subdivision_code": "TW-YUN", "locality": "西螺鎮",
+        })
+
+        r = self.req("DELETE", "/me/location", headers=auth)
+        self.check("DELETE /me/location 清除位置但保留國家",
+                   r.status_code == 200 and r.json()["has_location"] is False
+                   and r.json()["country_code"] == "TW", r.text[:200])
 
     def quotes(self, token: str, product_id: str) -> None:
         print("\n[7] 報價")
@@ -266,6 +423,8 @@ class Smoke:
             self.read_prices(product_id)
             token = self.auth()
             if token:
+                self.geo()
+                self.profile_and_location(token)
                 self.quotes(token, product_id)
             self.overview(product_id)
         self.admin_guard()

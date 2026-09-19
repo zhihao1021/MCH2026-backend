@@ -312,9 +312,34 @@ POST /v1/auth/otp/verify
     "phone": "+886912345678",
     "role": "farmer",
     "display_name": "阿明",
+    "business_name": null,
+    "bio": null,
+    "avatar_url": null,
+    "website_url": null,
     "country_code": "TW",
     "locale": "zh-Hant",
-    "region": null,
+    "preferred_currency": null,
+    "unit_system": null,
+    "currency": "TWD",
+    "effective_unit_system": "metric",
+    "timezone": null,
+    "location": {
+      "country_code": "TW",
+      "country_name": "臺灣",
+      "subdivision_code": null,
+      "subdivision_name": null,
+      "locality": null,
+      "address_line": null,
+      "postal_code": null,
+      "latitude": null,
+      "longitude": null,
+      "timezone": null,
+      "visibility": "region",
+      "updated_at": null,
+      "formatted": "臺灣"
+    },
+    "has_location": false,
+    "contact_phone_public": true,
     "is_active": true,
     "can_quote": true,
     "created_at": "2026-09-19T08:30:00Z",
@@ -328,6 +353,10 @@ POST /v1/auth/otp/verify
 - `is_new_user`：這次驗證是否順帶建立了新帳號
 - `user.role`：已綁定的身分。登入時即使在 request 裡帶了別的值，這裡回的仍是原本的身分
 - `user.can_quote`：等同 `role in (farmer, trader)`，前端可直接拿來決定要不要顯示「我要報價」
+- `user.currency` / `user.effective_unit_system`：**已經把國家預設套進去的值，前端直接用這兩個**。
+  對應的 `preferred_currency` / `unit_system` 是使用者「明確設定過」的值，`null` 代表跟著國家走
+- `user.location`：所在位置，見第 4 節。剛註冊時只有 `country_code`，`has_location` 為 `false`，
+  前端可據此提示使用者去登記
 
 **可能的錯誤**：
 
@@ -403,17 +432,20 @@ POST /v1/auth/logout        （需登入）
 
 ---
 
-## 4. 個人資料（需登入）
+## 4. 個人檔案與位置
 
-### 4.1 取得個人資料
+這個 App 不只在台灣使用，所以凡是跟國家有關的東西（電話國碼、幣別、時區、
+度量衡、行政區清單）都由後端提供，前端不要自己寫死任何一份清單。
+
+### 4.1 取得個人檔案
 
 ```
 GET /v1/me
 ```
 
-回應即 3.2 中的 `user` 物件。
+回應即 3.2 中的 `user` 物件（含 `location`）。
 
-### 4.2 更新個人資料
+### 4.2 更新個人檔案
 
 ```
 PATCH /v1/me
@@ -424,33 +456,246 @@ PATCH /v1/me
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
 | `display_name` | string | 暱稱，≤80 字元 |
-| `region` | string | 產地 / 營業地，≤80 字元。報價時的預設值 |
+| `business_name` | string | 農場名 / 商號，≤120 字元 |
+| `bio` | string | 自我介紹，≤500 字元 |
+| `avatar_url` | string | 頭像網址，必須是 `http://` 或 `https://` |
+| `website_url` | string | 網站，必須是 `http://` 或 `https://` |
 | `locale` | string | 偏好的顯示語系，≤16 字元 |
+| `preferred_currency` | string | ISO 4217 三碼。`null` = 跟著國家預設 |
+| `unit_system` | string | `metric` / `imperial`。`null` = 跟著國家預設 |
+| `contact_phone_public` | bool | 新報價預設要不要公開電話 |
 
 ```json
-{ "display_name": "阿明", "region": "雲林縣" }
+{ "display_name": "阿明", "business_name": "阿明果園" }
 ```
 
-回應為更新後的 `user` 物件。
+- **明確傳 `null` 代表「清空這個欄位」**，沒傳才是「不要動」。
+- 回應為更新後的 `user` 物件。
 
-> **`role` 不能在這裡改。** 身分在註冊時綁定（見第 3 節），
-> 送 `role` 會直接回 **422 `validation_error`**（未知欄位），而不是被默默忽略。
-> 使用者選錯身分時，請他聯絡維運，由 `PATCH /v1/admin/users/{id}` 更正。
+> **`role` 與位置欄位不能在這裡改。**
+> 身分在註冊時綁定（見第 3 節）；位置走 4.4 的專屬端點，因為它有跨欄位驗證。
+> 送了會直接回 **422 `validation_error`**（未知欄位），而不是被默默忽略。
 
-### 4.3 我的報價
+### 4.3 取得自己的位置
+
+```
+GET /v1/me/location
+```
+
+回 `LocationOut`。**本人視角一律是完整資料**，不受 `visibility` 影響——
+否則使用者沒辦法確認自己到底填了什麼。
+
+### 4.4 登記 / 更新位置 ⭐
+
+```
+PUT /v1/me/location
+```
+
+**這是 PUT 語意：沒帶的欄位會被清空**，不是部分更新。
+位置資料很容易殘留（改了縣市卻忘了改郵遞區號），整筆取代最不會出錯。
+
+| 欄位 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `country_code` | string | ✅ | ISO 3166-1 alpha-2。必須在 `GET /v1/geo/countries` 的清單中 |
+| `subdivision_code` | string | | ISO 3166-2，例如 `TW-YUN`、`JP-13`。**只有 `has_subdivision_data=true` 的國家可用** |
+| `locality` | string | | 市 / 鎮 / 區，自由輸入，≤120 字元。任何國家都適用 |
+| `address_line` | string | | 街道地址，≤200 字元。**只有 `visibility=exact` 才會對外顯示** |
+| `postal_code` | string | | 郵遞區號，≤16 字元。格式各國差異太大，不做驗證 |
+| `latitude` / `longitude` | number | | 座標，**必須成對提供** |
+| `timezone` | string | | IANA 時區。省略則自動帶入該國預設 |
+| `visibility` | string | | `exact` / `approximate` / `region`（預設）/ `private` |
+
+```json
+{
+  "country_code": "TW",
+  "subdivision_code": "TW-YUN",
+  "locality": "西螺鎮",
+  "postal_code": "648",
+  "visibility": "region"
+}
+```
+
+沒有行政區清單的國家就不要傳 `subdivision_code`，改用 `locality`：
+
+```json
+{ "country_code": "US", "locality": "Fresno, CA", "postal_code": "93721" }
+```
+
+回應為更新後的 `user` 物件（完整的，含新的 `currency` 與 `effective_unit_system`——
+**換了國家這兩個值會跟著變**，如果使用者沒有明確設定過）。
+
+**可能的錯誤**（都是 422 `validation_error`）：
+
+| 情境 | 訊息重點 |
+| --- | --- |
+| `country_code` 不在支援清單 | 「尚未支援的國家代碼」 |
+| `subdivision_code` 的國碼前綴與 `country_code` 不符 | 「不屬於國家」 |
+| `subdivision_code` 不在該國清單中 | 「不在 … 的行政區清單中」 |
+| 對沒有清單的國家傳 `subdivision_code` | 「請改用自由輸入的 locality」 |
+| 只傳了 `latitude` 或只傳了 `longitude` | 「必須成對提供」 |
+| `timezone` 不是有效的 IANA 時區 | 「不是有效的 IANA 時區」 |
+
+### 4.5 清除位置
+
+```
+DELETE /v1/me/location
+```
+
+清掉行政區、地址、郵遞區號與座標，**但保留 `country_code`**——
+幣別與電話格式都靠它。回應為更新後的 `user` 物件。
+
+### 4.6 位置的公開程度 ⚠️
+
+`visibility` 決定**別人**看到多少。預設是 `region`，刻意保守。
+
+| visibility | 行政區 / 城鎮 | 街道地址 | 座標 | `precision` |
+| --- | --- | --- | --- | --- |
+| `exact` | ✅ | ✅ | 完整 | `exact` |
+| `approximate` | ✅ | ❌ | 模糊化到小數 2 位（約 1 公里） | `approximate_1km` |
+| `region`（預設） | ✅ | ❌ | ❌ | `hidden` |
+| `private` | ❌ | ❌ | ❌ | `hidden` |
+
+`private` 時 `formatted` 只會有國名。
+
+### 4.7 `formatted` 地址
+
+後端會依國家組好單行地址，前端**不要自己拼**：
+
+- 台灣 / 日本 / 中國 / 韓國 / 香港 → 由大到小，郵遞區號在最前面
+  `648 臺灣 雲林縣 西螺鎮 延平路 100 號`
+- 其他國家 → 由小到大，郵遞區號在國名之前
+  `1 Main St, Fresno, 93721, United States`
+
+國名與行政區名會依請求的語系解析；`GET /v1/me` 用的是**使用者自己的 `locale`**，
+所以 zh-Hant 的使用者看自己的美國地址會是「美國」而不是 "United States"。
+
+### 4.8 我的報價
 
 ```
 GET /v1/me/quotes
 ```
 
 分頁參數同 2.2。**含已下架（withdrawn）與已過期（expired）的報價**，
-讓使用者可以管理自己的歷史報價。回應為 `Page<QuoteOut>`（見 6.5）。
+讓使用者可以管理自己的歷史報價。回應為 `Page<QuoteOut>`（見 8.5）。
 
 ---
 
-## 5. 品項與官方價格（公開）
+## 5. 公開個人檔案
 
-### 5.1 搜尋品項
+### 5.1 看別人的檔案
+
+```
+GET /v1/users/{user_id}
+```
+
+報價清單點進賣家時用的。**不含電話**——要不要露出電話是「每一筆報價」
+各自的決定，見 `QuoteOut.seller`。
+
+```json
+{
+  "id": "f2c4d5f6-...",
+  "display_name": "阿明",
+  "business_name": "阿明果園",
+  "role": "farmer",
+  "bio": "種了 20 年的西螺米",
+  "avatar_url": null,
+  "website_url": "https://example.org/farm",
+  "location": {
+    "country_code": "TW",
+    "country_name": "臺灣",
+    "subdivision_code": "TW-YUN",
+    "subdivision_name": "雲林縣",
+    "locality": "西螺鎮",
+    "address_line": null,
+    "latitude": null,
+    "longitude": null,
+    "precision": "hidden",
+    "formatted": "臺灣 雲林縣 西螺鎮"
+  },
+  "active_quote_count": 3,
+  "member_since": "2026-09-19T08:30:00Z"
+}
+```
+
+`location` 的內容依對方設定的 `visibility` 遞減（見 4.6）。
+查不到或已停用的使用者回 **404 `user_not_found`**。
+
+### 5.2 某人的公開報價
+
+```
+GET /v1/users/{user_id}/quotes
+```
+
+只含 `active` 的報價。分頁同 2.2，回應為 `Page<QuoteOut>`。
+
+---
+
+## 6. 國家與行政區（公開）
+
+前端組位置表單時用的參考資料。**不要在前端寫死任何一份清單。**
+
+### 6.1 支援的國家
+
+```
+GET /v1/geo/countries?locale=zh-Hant
+```
+
+```json
+[
+  {
+    "code": "TW",
+    "name": "臺灣",
+    "name_en": "Taiwan",
+    "dialing_code": "886",
+    "currency": "TWD",
+    "default_locale": "zh-Hant",
+    "default_timezone": "Asia/Taipei",
+    "unit_system": "metric",
+    "subdivision_label": "縣市",
+    "postal_code_example": "100",
+    "has_subdivision_data": true
+  }
+]
+```
+
+- `dialing_code`：登入畫面的國碼選擇器用
+- `subdivision_label`：**直接拿來當表單標籤**（台灣是「縣市」、日本是「都道府県」、美國是 "State"）
+- `has_subdivision_data`：`false` 代表這個國家還沒收錄行政區清單，
+  表單請改成自由輸入的 `locality` 文字框
+- 依 `name_en` 排序，可直接餵給下拉選單
+
+### 6.2 單一國家
+
+```
+GET /v1/geo/countries/{code}
+```
+
+不支援的國碼回 **404 `unsupported_country`**。
+
+### 6.3 一級行政區
+
+```
+GET /v1/geo/countries/{code}/subdivisions?locale=zh-Hant
+```
+
+```json
+[
+  { "code": "TW-YUN", "name": "雲林縣", "name_en": "Yunlin" },
+  { "code": "TW-CHA", "name": "彰化縣", "name_en": "Changhua" }
+]
+```
+
+- 代碼是 **ISO 3166-2**，可直接送給 `PUT /v1/me/location` 的 `subdivision_code`
+- 目前收錄台灣（22 筆）與日本（47 筆）
+- **回空陣列不是錯誤**，代表該國尚未收錄，請改用 `locality` 自由輸入
+
+---
+
+---
+
+## 7. 品項與官方價格（公開）
+
+### 7.1 搜尋品項
 
 ```
 GET /v1/products
@@ -499,7 +744,7 @@ GET /v1/products
 | `default_unit` | string | 標準單位（例如 `kg`） |
 | `image_url` | string\|null | 品項縮圖（330px 寬）。**顯示時需標示出處，見 2.5**；完整授權資訊請取品項詳情 |
 
-### 5.2 品項詳情
+### 7.2 品項詳情
 
 ```
 GET /v1/products/{ref}
@@ -539,7 +784,7 @@ GET /v1/products/{ref}
 
 沒有圖時 `image` 為 `null`（目前 134 個品項都有圖）。
 
-### 5.3 品項總覽（詳情頁一次拿齊）⭐
+### 7.3 品項總覽（詳情頁一次拿齊）⭐
 
 ```
 GET /v1/products/{ref}/overview
@@ -613,7 +858,7 @@ GET /v1/products/{ref}/overview
 - `quotes`：民間報價摘要（count / min / max / avg），與官方價並排顯示
 - `official_series` 可能為 `null`（完全沒有走勢資料時）
 
-### 5.4 各市場最新官方價
+### 7.4 各市場最新官方價
 
 ```
 GET /v1/products/{ref}/prices/official
@@ -633,7 +878,7 @@ GET /v1/products/{ref}/prices/official
 
 **回應**：`Page<OfficialPriceOut>`，元素形狀同 5.3 的 `official[]`。
 
-### 5.5 官方價走勢
+### 7.5 官方價走勢
 
 ```
 GET /v1/products/{ref}/prices/series
@@ -649,7 +894,7 @@ GET /v1/products/{ref}/prices/series
 
 **回應**：同 5.3 的 `official_series` 物件。
 
-### 5.6 有此品項資料的市場
+### 7.6 有此品項資料的市場
 
 ```
 GET /v1/products/{ref}/markets
@@ -671,7 +916,7 @@ GET /v1/products/{ref}/markets
 | `latitude` / `longitude` | float\|null | 座標 |
 | `source_key` | string\|null | 資料來源 key |
 
-### 5.7 市場清單
+### 7.7 市場清單
 
 ```
 GET /v1/markets
@@ -688,7 +933,7 @@ GET /v1/markets
 
 **回應**：`Page<MarketOut>`。
 
-### 5.8 單一市場
+### 7.8 單一市場
 
 ```
 GET /v1/markets/{market_id}
@@ -698,9 +943,9 @@ GET /v1/markets/{market_id}
 
 ---
 
-## 6. 民間報價（小農 / 盤商）
+## 8. 民間報價（小農 / 盤商）
 
-### 6.1 瀏覽報價（公開）
+### 8.1 瀏覽報價（公開）
 
 ```
 GET /v1/quotes
@@ -722,7 +967,7 @@ GET /v1/quotes
 
 排序：最新建立的在前。
 
-### 6.2 新增報價（需登入，身分為 farmer / trader）
+### 8.2 新增報價（需登入，身分為 farmer / trader）
 
 ```
 POST /v1/quotes
@@ -745,7 +990,7 @@ POST /v1/quotes
 | `location_text` | string | | 位置描述，≤160 字元 |
 | `latitude` / `longitude` | float | | 座標（-90~90 / -180~180） |
 | `note` | string | | 備註，≤500 字元 |
-| `contact_phone_public` | bool | | 是否公開電話，預設 `true`。`false` 時其他人只能看到遮罩號碼 |
+| `contact_phone_public` | bool | | 是否公開電話。**省略則沿用個人檔案的設定**（`GET /v1/me` 的 `contact_phone_public`）。`false` 時其他人只能看到遮罩號碼 |
 | `valid_hours` | int | | 幾小時後過期，0–720（30 天）。`0` = 永不過期。省略用預設 48 小時 |
 
 ```json
@@ -760,7 +1005,7 @@ POST /v1/quotes
 }
 ```
 
-**回應**（HTTP 201）：`QuoteOut`（見 6.5）。
+**回應**（HTTP 201）：`QuoteOut`（見 8.5）。
 
 **規則**：
 
@@ -770,7 +1015,7 @@ POST /v1/quotes
 - 有效報價數有上限（預設 50 筆），超過 409 `quote_limit_reached`
 - 品項不存在或已停用 → 404 `product_not_found`
 
-### 6.3 單筆報價（公開）
+### 8.3 單筆報價（公開）
 
 ```
 GET /v1/quotes/{quote_id}
@@ -778,7 +1023,7 @@ GET /v1/quotes/{quote_id}
 
 **回應**：`QuoteOut`。
 
-### 6.4 修改報價（需登入，僅限本人）
+### 8.4 修改報價（需登入，僅限本人）
 
 ```
 PATCH /v1/quotes/{quote_id}
@@ -796,7 +1041,7 @@ PATCH /v1/quotes/{quote_id}
 已下架（`withdrawn` / `hidden`）的報價不可修改 → 409 `quote_not_editable`。
 非本人 → 403 `not_quote_owner`。
 
-### 6.5 `QuoteOut` 形狀
+### 8.5 `QuoteOut` 形狀
 
 ```json
 {
@@ -831,11 +1076,12 @@ PATCH /v1/quotes/{quote_id}
 | 欄位 | 說明 |
 | --- | --- |
 | `status` | `active` / `expired` / `withdrawn` / `hidden`。公開列表只會看到 `active`；`/me/quotes` 會含所有狀態 |
+| `seller.business_name` | 農場名 / 商號，可能為 `null`。功能機畫面窄，可與 `display_name` 二選一顯示 |
 | `seller.phone` | 報價者本人永遠看到完整號碼；其他人只有報價者同意公開（`contact_phone_public=true`）時才看得到完整號碼，否則為遮罩字串 |
 | `seller.phone_is_masked` | 目前電話是否被遮罩 |
 | `valid_until` | 過期時間；`null` = 永不過期 |
 
-### 6.6 下架報價（需登入，僅限本人）
+### 8.6 下架報價（需登入，僅限本人）
 
 ```
 DELETE /v1/quotes/{quote_id}
@@ -845,9 +1091,9 @@ DELETE /v1/quotes/{quote_id}
 
 ---
 
-## 7. 資料來源（公開）
+## 9. 資料來源（公開）
 
-### 7.1 資料來源清單
+### 9.1 資料來源清單
 
 ```
 GET /v1/sources
@@ -892,7 +1138,7 @@ GET /v1/sources
 | `last_error` | 最近一次失敗原因 |
 | `load_errors` | 載入失敗的 extension（服務不會因此停掉，但這裡看得到） |
 
-### 7.2 單一資料來源
+### 9.2 單一資料來源
 
 ```
 GET /v1/sources/{key}
@@ -902,7 +1148,7 @@ GET /v1/sources/{key}
 
 ---
 
-## 8. 管理端點（維運用，不給 App）
+## 10. 管理端點（維運用，不給 App）
 
 全部需要 header `X-Admin-Token: <ADMIN_API_TOKEN>`。給部署後維運使用，
 前端 App 不需要（也無法）呼叫。以下僅列清單：
@@ -924,7 +1170,7 @@ GET /v1/sources/{key}
 
 ---
 
-## 9. 枚舉值一覽
+## 11. 枚舉值一覽
 
 ### `UserRole`（身分）
 
@@ -959,9 +1205,30 @@ GET /v1/sources/{key}
 | `withdrawn` | 已下架（使用者主動） |
 | `hidden` | 遭檢舉 / 違規下架（管理端） |
 
+### `LocationVisibility`（位置公開程度）
+
+| 值 | 說明 |
+| --- | --- |
+| `exact` | 完整地址與座標 |
+| `approximate` | 座標模糊化到約 1 公里，不給街道地址 |
+| `region` | 只到行政區 / 城鎮（**預設**） |
+| `private` | 只顯示國家 |
+
+揭露範圍的對照表見 4.6。
+
+### `UnitSystem`（度量衡）
+
+| 值 | 說明 |
+| --- | --- |
+| `metric` | 公制（kg） |
+| `imperial` | 英制（lb） |
+
+使用者的 `unit_system` 為 `null` 時跟著所在國家走：美國是 `imperial`，其餘目前皆為 `metric`。
+前端請直接用 `user.effective_unit_system`。
+
 ---
 
-## 10. 給前端的實作建議
+## 12. 給前端的實作建議
 
 1. **詳情頁用 `/products/{ref}/overview`**：一次拿齊官方價、走勢、報價摘要，
    省兩趟往返（功能機在 4G 下這差別很明顯）。

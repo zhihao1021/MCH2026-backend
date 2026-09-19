@@ -67,7 +67,7 @@ async def verify_otp(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
         expires_in=tokens.expires_in,
-        user=UserOut.model_validate(user),
+        user=UserOut.from_model(user),
         is_new_user=created,
     )
 
@@ -85,7 +85,7 @@ async def refresh(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
         expires_in=tokens.expires_in,
-        user=UserOut.model_validate(user),
+        user=UserOut.from_model(user),
     )
 
 

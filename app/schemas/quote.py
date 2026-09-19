@@ -29,7 +29,8 @@ class QuoteCreate(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     note: str | None = Field(default=None, max_length=500)
-    contact_phone_public: bool = True
+    # None = 沿用個人檔案的 contact_phone_public 設定
+    contact_phone_public: bool | None = None
     # 幾小時後過期；0 代表不自動過期
     valid_hours: int | None = Field(default=None, ge=0, le=24 * 30)
 
@@ -60,6 +61,8 @@ class QuoteSellerOut(BaseModel):
 
     id: uuid.UUID
     display_name: str | None = None
+    # 農場名 / 商號。功能機畫面窄，前端可二選一顯示
+    business_name: str | None = None
     role: UserRole
     region: str | None = None
     phone: str | None = None
@@ -114,6 +117,7 @@ class QuoteOut(BaseModel):
             seller=QuoteSellerOut(
                 id=quote.user_id,
                 display_name=quote.user.display_name,
+                business_name=quote.user.business_name,
                 role=quote.role_snapshot,
                 region=quote.region,
                 phone=phone,

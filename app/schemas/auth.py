@@ -5,10 +5,21 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from app.models.enums import UserRole
+from app.models.enums import UnitSystem, UserRole
+from app.models.user import User
 from app.schemas.common import ORMModel
+from app.schemas.profile import (
+    LocationOut,
+    ProfileUpdate,
+    effective_currency,
+    effective_unit_system,
+)
+
+# 個人檔案的可編輯欄位定義在 app.schemas.profile。
+# 這裡重新匯出，讓既有的 `from app.schemas.auth import UserUpdate` 仍然可用。
+UserUpdate = ProfileUpdate
 
 
 class OtpRequestIn(BaseModel):
@@ -60,34 +71,70 @@ class LogoutIn(BaseModel):
 
 
 class UserOut(ORMModel):
+    """本人視角的完整個人檔案。
+
+    位置一律附在這裡，讓登入回應就帶齊前端要的東西，
+    功能機不必為了顯示「你的所在地」再打一支 API。
+    """
+
     id: uuid.UUID
     phone: str
     role: UserRole
+
     display_name: str | None = None
+    business_name: str | None = None
+    bio: str | None = None
+    avatar_url: str | None = None
+    website_url: str | None = None
+
     country_code: str
     locale: str
-    region: str | None = None
+    # 使用者明確設定的值；null 代表「跟著國家預設走」
+    preferred_currency: str | None = None
+    unit_system: UnitSystem | None = None
+    # 實際該用的值，已把國家預設套進去，前端直接用這兩個
+    currency: str
+    effective_unit_system: UnitSystem
+    timezone: str | None = None
+
+    location: LocationOut
+    has_location: bool
+
+    contact_phone_public: bool
     is_active: bool
     can_quote: bool
     created_at: datetime
     last_login_at: datetime | None = None
 
-
-class UserUpdate(BaseModel):
-    """可以自行修改的個人資料。
-
-    `role` 不在這裡：身分在註冊時綁定，之後不能自己改。
-    報價會帶上 `role_snapshot`，讓身分可以被信任；
-    若能隨時切換，「這是小農報的價」就失去意義了。
-    要更正身分得走 `PATCH /v1/admin/users/{id}`。
-    """
-
-    # 明確拒絕未知欄位：前端若還在送 role，會收到 422 而不是被默默忽略
-    model_config = ConfigDict(extra="forbid")
-
-    display_name: str | None = Field(default=None, max_length=80)
-    region: str | None = Field(default=None, max_length=80)
-    locale: str | None = Field(default=None, max_length=16)
+    @classmethod
+    def from_model(cls, user: User) -> "UserOut":
+        # 用使用者自己的語系解析國名與行政區名，不看請求的 Accept-Language：
+        # 這是「我的資料」，該照他自己的設定顯示
+        locale = user.locale
+        return cls(
+            id=user.id,
+            phone=user.phone,
+            role=user.role,
+            display_name=user.display_name,
+            business_name=user.business_name,
+            bio=user.bio,
+            avatar_url=user.avatar_url,
+            website_url=user.website_url,
+            country_code=user.country_code,
+            locale=user.locale,
+            preferred_currency=user.preferred_currency,
+            unit_system=user.unit_system,
+            currency=effective_currency(user),
+            effective_unit_system=effective_unit_system(user),
+            timezone=user.timezone,
+            location=LocationOut.from_model(user, locale),
+            has_location=user.has_location,
+            contact_phone_public=user.contact_phone_public,
+            is_active=user.is_active,
+            can_quote=user.can_quote,
+            created_at=user.created_at,
+            last_login_at=user.last_login_at,
+        )
 
 
 class AdminUserRoleUpdate(BaseModel):

@@ -27,15 +27,27 @@ def test_user_update_rejects_role() -> None:
 
 
 def test_user_update_allows_editable_fields() -> None:
-    u = UserUpdate(display_name="阿明", region="雲林縣", locale="zh-Hant")
+    u = UserUpdate(display_name="阿明", business_name="阿明果園", locale="zh-Hant")
     assert u.display_name == "阿明"
     assert "role" not in u.model_dump()
 
 
 def test_user_update_partial_is_allowed() -> None:
     """PATCH 只送要改的欄位，未送的不應出現在 exclude_unset 的結果裡。"""
-    u = UserUpdate(region="嘉義縣")
-    assert u.model_dump(exclude_unset=True) == {"region": "嘉義縣"}
+    u = UserUpdate(business_name="阿明果園")
+    assert u.model_dump(exclude_unset=True) == {"business_name": "阿明果園"}
+
+
+def test_user_update_excludes_location_fields() -> None:
+    """位置走 PUT /v1/me/location，不能混在個人檔案的 PATCH 裡改。
+
+    位置有跨欄位驗證（行政區要屬於該國、經緯度要成對），
+    放進這裡就會繞過那些檢查。"""
+    from pydantic import ValidationError as _VE
+
+    for field in ("locality", "subdivision_code", "country_code", "latitude"):
+        with pytest.raises(_VE):
+            UserUpdate(**{field: "x"})
 
 
 @pytest.mark.parametrize("role", ["consumer", "farmer", "trader"])
