@@ -1,5 +1,8 @@
 # 執行期依賴。安裝：pip install -r requirements.txt
 fastapi>=0.141,<1.0
+# FastAPI 會帶進來，但 app/core/errors.py 直接 import 了它，所以明確宣告。
+# 不加版本限制，交給 fastapi 的 pin 決定實際版本。
+starlette
 uvicorn[standard]>=0.53
 sqlalchemy[asyncio]>=2.0.40,<2.1
 asyncpg>=0.31
