@@ -274,6 +274,28 @@ curl -X POST localhost:8000/v1/auth/otp/verify -H "Content-Type: application/jso
 `dev_login.py` 省略 `--phone` 時會隨機產生號碼，所以連續跑不會撞到前兩項。
 另外每次索取新碼都會把同號碼的舊碼作廢，別拿上一封的號碼去驗。
 
+### 品項圖片
+
+每個品項配一張 Wikimedia Commons 的圖，連同出處一起存進 `products`：
+
+```bash
+python scripts/fetch_product_images.py                    # 試算
+python scripts/fetch_product_images.py --apply            # 只補沒圖的
+python scripts/fetch_product_images.py --apply --all      # 全部重抓
+python scripts/fetch_product_images.py --apply --slug pear
+```
+
+**這些圖的授權（多為 CC BY-SA）要求標示來源、作者與條款**，所以 DB 存的不只是
+網址，還有 `image_source` / `image_source_url` / `image_license` / `image_author`。
+API 在品項詳情與 overview 回一個 `image` 物件，**前端顯示圖片時有義務一併顯示出處**。
+
+腳本用英文名去查維基條目，對得到 98/134；其餘靠 `TITLE_OVERRIDES` 人工指定
+（白蘿蔔 → `Daikon`、蓮霧 → `Syzygium samarangense`、蘆筍的條目沒有代表圖
+所以直接指定 `File:Asparagus-Bundle.jpg`）。新增品項後跑一次 `--apply` 即可補圖。
+
+> 呼叫 Wikimedia 要帶符合他們 robot policy 的 User-Agent（含專案網址與聯絡方式），
+> 否則直接 403。腳本裡的 `USER_AGENT` 換專案時記得改。
+
 ### 品項對照
 
 抓進來的官方價要**對照到標準品項**才會出現在 `/products/{id}/prices/*`。

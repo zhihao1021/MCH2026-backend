@@ -134,6 +134,10 @@ async def create_product(
         default_unit=payload.default_unit,
         names=[(n.locale, n.name, n.is_primary) for n in payload.names],
         image_url=payload.image_url,
+        image_source=payload.image_source,
+        image_source_url=payload.image_source_url,
+        image_license=payload.image_license,
+        image_author=payload.image_author,
         popularity=payload.popularity,
     )
     return ProductDetailOut.from_model(product, locale)

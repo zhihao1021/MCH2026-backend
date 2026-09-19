@@ -97,6 +97,10 @@ async def create_product(
     default_unit: str,
     names: Sequence[tuple[str, str, bool]],
     image_url: str | None = None,
+    image_source: str | None = None,
+    image_source_url: str | None = None,
+    image_license: str | None = None,
+    image_author: str | None = None,
     popularity: int = 0,
 ) -> Product:
     """建立品項。`names` 是 (locale, name, is_primary) 的序列。"""
@@ -113,6 +117,10 @@ async def create_product(
         category=category,
         default_unit=default_unit,
         image_url=image_url,
+        image_source=image_source,
+        image_source_url=image_source_url,
+        image_license=image_license,
+        image_author=image_author,
         popularity=popularity,
     )
     seen: set[tuple[str, str]] = set()

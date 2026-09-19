@@ -18,8 +18,41 @@ class ProductNameOut(ORMModel):
     is_primary: bool
 
 
+class ImageCreditOut(BaseModel):
+    """圖片與其出處。
+
+    圖多來自 Wikimedia Commons，授權（CC BY / CC BY-SA）**要求標示**
+    來源、作者與條款。所以只要畫面上顯示 `url` 這張圖，
+    就有義務讓使用者看得到 `license` 與 `author`，或至少提供
+    連到 `source_url` 的入口。詳見 API.md 的「圖片與授權」。
+    """
+
+    url: str
+    source: str | None = None
+    source_url: str | None = None
+    license: str | None = None
+    # 少數圖在 Commons 上沒有標作者；這時靠 source_url 連過去即可
+    author: str | None = None
+
+    @classmethod
+    def from_model(cls, product: Product) -> "ImageCreditOut | None":
+        if not product.image_url:
+            return None
+        return cls(
+            url=product.image_url,
+            source=product.image_source,
+            source_url=product.image_source_url,
+            license=product.image_license,
+            author=product.image_author,
+        )
+
+
 class ProductOut(BaseModel):
-    """品項。`name` 已依請求的 locale 解析好，前端直接顯示即可。"""
+    """品項。`name` 已依請求的 locale 解析好，前端直接顯示即可。
+
+    清單只給 `image_url`，不帶完整出處——功能機頻寬有限，
+    一頁 20 筆各帶一份授權字串太浪費。要顯示出處請取品項詳情。
+    """
 
     id: uuid.UUID
     slug: str
@@ -43,6 +76,8 @@ class ProductOut(BaseModel):
 class ProductDetailOut(ProductOut):
     names: list[ProductNameOut] = Field(default_factory=list)
     popularity: int = 0
+    # 完整的圖片出處。有 image_url 就一定有這個物件
+    image: ImageCreditOut | None = None
 
     @classmethod
     def from_model(cls, product: Product, locale: str) -> "ProductDetailOut":
@@ -55,6 +90,7 @@ class ProductDetailOut(ProductOut):
             image_url=product.image_url,
             names=[ProductNameOut.model_validate(n) for n in product.names],
             popularity=product.popularity,
+            image=ImageCreditOut.from_model(product),
         )
 
 
@@ -63,6 +99,11 @@ class ProductCreate(BaseModel):
     category: ProductCategory = ProductCategory.OTHER
     default_unit: str = Field(default="kg", max_length=16)
     image_url: str | None = None
+    # 有帶 image_url 就應該一併帶出處，否則無法合規地顯示
+    image_source: str | None = Field(default=None, max_length=80)
+    image_source_url: str | None = None
+    image_license: str | None = Field(default=None, max_length=80)
+    image_author: str | None = Field(default=None, max_length=200)
     popularity: int = 0
     # 至少一筆；第一筆若沒指定 slug 會用來產生 slug
     names: list[ProductNameOut] = Field(min_length=1)

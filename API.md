@@ -136,12 +136,58 @@ GET /healthz
 目的是避免浮點誤差。顯示或計算前請自行 parse。小數位數不保證固定
 （可能是 `"19.2"` 也可能是 `"19.20"`），**請用數值比較，不要比字串**。
 
-### 2.5 時間格式
+### 2.5 圖片與授權 ⚠️
+
+每個品項都有一張圖，來自 **Wikimedia Commons**。
+
+```
+image_url  https://thumb.wikimedia.org/.../330px-Cabbage_and_cross_section_on_white.jpg
+```
+
+縮圖寬度 330px（功能機螢幕寬 240px，這個尺寸放大不糊、又不浪費頻寬）。
+
+**這些圖幾乎都有授權條件，不是「隨便用」。** 目前 134 個品項的授權分佈：
+
+| 授權 | 數量 | 是否必須標示 |
+| --- | --- | --- |
+| CC BY-SA（2.0–4.0） | 73 | ✅ 需標示來源、作者、授權 |
+| Public domain / CC0 | 34 | 不需要（但標了更好） |
+| CC BY（1.0–4.0） | 15 | ✅ 需標示 |
+| GFDL | 10 | ✅ 需標示 |
+| Attribution | 1 | ✅ 需標示 |
+
+所以 **顯示圖片的畫面必須同時讓使用者看得到出處**。API 在品項詳情
+（5.2）與總覽（5.3）回一個 `image` 物件：
+
+```json
+{
+  "url": "https://thumb.wikimedia.org/.../330px-Cabbage_and_cross_section_on_white.jpg",
+  "source": "Wikimedia Commons",
+  "source_url": "https://commons.wikimedia.org/wiki/File:Cabbage_and_cross_section_on_white.jpg",
+  "license": "GFDL 1.2",
+  "author": "fir0002 flagstaffotos [at] gmail.com"
+}
+```
+
+**最低限度的做法**：圖片下方放一行小字
+
+```
+圖片：Wikimedia Commons / fir0002（GFDL 1.2）
+```
+
+`author` 可能是 `null`（少數圖在 Commons 上沒標作者），這時顯示
+`圖片：Wikimedia Commons（CC BY-SA 3.0）` 並讓它可以連到 `source_url` 即可。
+
+> **清單（5.1）只回 `image_url`，不回 `image` 物件**——一頁 20 筆各帶一份
+> 授權字串太浪費頻寬。清單的縮圖請在「關於 / 圖片來源」頁面統一標示，
+> 或讓使用者點進詳情頁看。
+
+### 2.6 時間格式
 
 - 日期：`YYYY-MM-DD`（例如 `2026-09-17`）
 - 日期時間：ISO 8601，帶時區（例如 `2026-09-19T08:30:00Z` 或 `...+00:00`）
 
-### 2.6 認證
+### 2.7 認證
 
 登入成功後拿到 `access_token` 與 `refresh_token`：
 
@@ -451,7 +497,7 @@ GET /v1/products
 | `name` | string | 已依語系解析好的名稱，直接顯示 |
 | `category` | string | 分類 |
 | `default_unit` | string | 標準單位（例如 `kg`） |
-| `image_url` | string\|null | 品項圖片 |
+| `image_url` | string\|null | 品項縮圖（330px 寬）。**顯示時需標示出處，見 2.5**；完整授權資訊請取品項詳情 |
 
 ### 5.2 品項詳情
 
@@ -470,9 +516,28 @@ GET /v1/products/{ref}
     { "locale": "zh-Hant", "name": "高麗菜", "is_primary": true },
     { "locale": "zh-Hant", "name": "甘藍", "is_primary": false }
   ],
-  "popularity": 100
+  "popularity": 100,
+  "image": {
+    "url": "https://thumb.wikimedia.org/.../330px-Cabbage_and_cross_section_on_white.jpg",
+    "source": "Wikimedia Commons",
+    "source_url": "https://commons.wikimedia.org/wiki/File:Cabbage_and_cross_section_on_white.jpg",
+    "license": "GFDL 1.2",
+    "author": "fir0002 flagstaffotos [at] gmail.com"
+  }
 }
 ```
+
+`image` 的欄位：
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `url` | string | 圖片網址，與外層的 `image_url` 相同 |
+| `source` | string\|null | 來源平台，目前一律是 `Wikimedia Commons` |
+| `source_url` | string\|null | 圖片說明頁，可讓使用者點進去看完整授權 |
+| `license` | string\|null | 授權簡稱，例如 `CC BY-SA 4.0` / `Public domain` |
+| `author` | string\|null | 作者。少數圖沒有標，這時只顯示來源與授權即可 |
+
+沒有圖時 `image` 為 `null`（目前 134 個品項都有圖）。
 
 ### 5.3 品項總覽（詳情頁一次拿齊）⭐
 
@@ -495,6 +560,7 @@ GET /v1/products/{ref}/overview
 ```json
 {
   "product": { "...": "ProductOut，見 5.1" },
+  "image": { "...": "圖片與出處，見 5.2；詳情頁會大張顯示，務必標示" },
   "official": [
     {
       "market_id": "f8e7d6c5-...",
@@ -915,6 +981,10 @@ GET /v1/sources/{key}
 11. **身分選擇要跟驗證碼同一畫面**：`otp/request` 回的 `is_registered: false`
     就代表這是註冊，直接在輸入驗證碼的畫面加三個選項（消費者 / 小農 / 盤商），
     `verify` 一次送出。多開一個畫面就多一次往返，功能機上很有感。
-12. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
+12. **圖片一定要標出處**：`image.license` 多是 CC BY-SA，法律上要求標示。
+    詳情頁在圖片下放一行「圖片：{source} / {author}（{license}）」即可，
+    能連到 `source_url` 更好。清單的縮圖可統一在「關於」頁標示。
+    這不是建議，是授權條件（見 2.5）。
+13. **用 `user.can_quote` 控制報價入口**：不要自己判斷 `role`，
     後端已經算好。身分註冊後不能改，所以這個值在整個 session 內是穩定的，
     可以安心快取。選錯身分的使用者請導向客服，不要在 App 裡提供切換。

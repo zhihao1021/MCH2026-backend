@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.models.catalog import DataSource, Market
 from app.models.price import OfficialPrice
-from app.schemas.catalog import ProductOut
+from app.schemas.catalog import ImageCreditOut, ProductOut
 
 
 class OfficialPriceOut(BaseModel):
@@ -88,6 +88,8 @@ class ProductPriceOverview(BaseModel):
     """品項詳情頁一次要的全部東西，避免功能機連打三支 API。"""
 
     product: ProductOut
+    # 圖片出處。詳情頁會大張顯示圖片，所以這裡必須帶完整授權資訊
+    image: ImageCreditOut | None = None
     official: list[OfficialPriceOut]
     official_series: PriceSeriesOut | None = None
     quotes: QuoteSummaryOut

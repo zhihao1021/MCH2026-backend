@@ -109,8 +109,19 @@ class Product(Base, TimestampMixin):
     )
     # 顯示與換算的基準單位，例如 "kg"
     default_unit: Mapped[str] = mapped_column(String(16), nullable=False, default="kg")
-    image_url: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # -- 圖片與出處 ------------------------------------------------------
+    # 多數自由圖庫（Wikimedia 等）的授權要求標示來源、作者與授權條款，
+    # 所以不能只存一個網址——顯示圖片的地方就必須能顯示出處。
+    image_url: Mapped[str | None] = mapped_column(Text)
+    # 來源平台，例如 "Wikimedia Commons"
+    image_source: Mapped[str | None] = mapped_column(String(80))
+    # 該圖的說明頁，點進去可看完整授權
+    image_source_url: Mapped[str | None] = mapped_column(Text)
+    # 授權條款簡稱，例如 "CC BY-SA 4.0"、"Public domain"
+    image_license: Mapped[str | None] = mapped_column(String(80))
+    image_author: Mapped[str | None] = mapped_column(String(200))
     # 首頁熱門排序用，數字大的排前面
     popularity: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
 
@@ -118,6 +129,10 @@ class Product(Base, TimestampMixin):
         back_populates="product", cascade="all, delete-orphan", lazy="selectin"
     )
     mappings: Mapped[list["ProductSourceMapping"]] = relationship(back_populates="product")
+
+    @property
+    def has_image(self) -> bool:
+        return bool(self.image_url)
 
     def display_name(self, locale: str, fallback: str = "en") -> str:
         """取指定語系的主要名稱，找不到就退回 fallback，再退回任一個。"""

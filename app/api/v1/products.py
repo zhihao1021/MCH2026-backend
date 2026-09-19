@@ -10,7 +10,7 @@ from fastapi import APIRouter, Query
 from app.core.deps import DbSession, Locale, Paging
 from app.core.pagination import Page, PageParams
 from app.models.enums import ProductCategory
-from app.schemas.catalog import MarketOut, ProductDetailOut, ProductOut
+from app.schemas.catalog import ImageCreditOut, MarketOut, ProductDetailOut, ProductOut
 from app.schemas.price import (
     OfficialPriceOut,
     PricePointOut,
@@ -75,6 +75,7 @@ async def product_overview(
 
     return ProductPriceOverview(
         product=ProductOut.from_model(product, locale),
+        image=ImageCreditOut.from_model(product),
         official=[OfficialPriceOut.from_row(p, m, s) for p, m, s in rows],
         official_series=_series_out(series),
         quotes=QuoteSummaryOut(
