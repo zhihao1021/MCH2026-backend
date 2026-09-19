@@ -376,6 +376,34 @@ GEOIP_TIMEOUT=8
 > 實作 `app/services/geoip.py` 的 `GeoIpProvider` 再註冊進 `_PROVIDERS` 即可
 > （與 `sms.py` 同一個模式）。自架 MaxMind GeoLite2 可以完全避免外送 IP。
 
+### 產生示範使用者
+
+兩支腳本分工不同：
+
+```bash
+# 手寫的少量精緻資料：完整個人檔案、商號簡介、四種位置公開程度
+python scripts/seed_demo_farmers.py            # 18 位（TW / UG / JP / US）
+python scripts/seed_demo_farmers.py --purge
+
+# 批量填充：讓看板與清單頁看起來像有人在用
+python scripts/seed_bulk_users.py                          # 30 小農 + 10 盤商
+python scripts/seed_bulk_users.py --farmers 50 --traders 15
+python scripts/seed_bulk_users.py --countries TW
+python scripts/seed_bulk_users.py --purge
+```
+
+`seed_bulk_users.py` 的報價**錨定在該區域該作物近 30 天的真實官方行情**上，
+形成合理的產銷鏈：
+
+```
+盤商收購價（批發 × 0.55~0.75）< 小農直售價（× 0.75~0.95）< 官方批發價
+```
+
+亂數只用在各自的浮動區間內。不這樣做的話，Demo 時一眼就會看出價格是假的。
+小農也只會被放在**該作物確實有官方行情的區域**，否則點進去對照不到任何官方價。
+
+固定 `--seed` 所以可重現；重跑同一個 seed 是更新而不是重複建立。
+
 ### 品項圖片
 
 每個品項配一張 Wikimedia Commons 的圖，連同出處一起存進 `products`：
