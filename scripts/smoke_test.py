@@ -75,12 +75,20 @@ class Smoke:
 
     def mappings(self) -> str | None:
         print("\n[4] 品項與代碼對照")
-        r = self.req("GET", "/admin/mappings?source_key=demo_mock&unmapped_only=true&limit=50",
-                     headers=self.admin)
-        unmapped = r.json()["items"]
-        self.check("有待對應的來源代碼", len(unmapped) > 0, f"{len(unmapped)} 筆")
+        r = self.req("GET", "/admin/mappings?source_key=demo_mock&limit=50", headers=self.admin)
+        all_maps = r.json()["items"]
+        self.check("GET /admin/mappings", r.status_code == 200, f"{len(all_maps)} 筆")
+
+        unmapped = [m for m in all_maps if m["product_id"] is None]
         if not unmapped:
-            return None
+            # 代碼可能已經被 automap 全部對照過了。這時候不重複建品項，
+            # 直接拿一個既有的對照來驗證後面的價格查詢。
+            if not all_maps:
+                self.check("有可用的來源代碼", False, "demo_mock 完全沒有對照，請先跑一次 sync")
+                return None
+            product_id = all_maps[0]["product_id"]
+            self.check("代碼皆已對照，沿用既有品項", True, f"product_id={product_id}")
+            return product_id
 
         first = unmapped[0]
         r = self.req(
@@ -126,8 +134,13 @@ class Smoke:
         r = self.req("GET", f"/products/{product_id}/markets")
         self.check("GET 有資料的市場", r.status_code == 200, f"{len(r.json())} 個市場")
 
-        r = self.req("GET", "/products?q=Smoke&locale=en")
-        self.check("GET 品項搜尋（英文別名）", r.status_code == 200 and r.json()["total"] > 0,
+        # 用這個品項自己的名稱回頭搜尋，確認別名索引有建起來
+        detail = self.req("GET", f"/products/{product_id}?locale=zh-Hant").json()
+        name = detail["name"]
+        r = self.req("GET", "/products", params={"q": name, "locale": "zh-Hant"})
+        found = [i["id"] for i in r.json().get("items", [])]
+        self.check(f"GET 品項搜尋（{name}）",
+                   r.status_code == 200 and product_id in found,
                    f"total={r.json().get('total')}")
 
     def auth(self) -> str | None:
@@ -137,10 +150,19 @@ class Smoke:
         r = self.req("POST", "/auth/otp/request", json={"phone": phone, "country_code": "TW"})
         body = r.json()
         self.check("POST /auth/otp/request", r.status_code == 202, str(body)[:200])
+        self.check("新號碼 is_registered=false", body.get("is_registered") is False,
+                   str(body.get("is_registered")))
         code = body.get("debug_code")
         if not code:
             self.check("取得 debug 驗證碼", False, "請設定 OTP_DEBUG_ECHO=true")
             return None
+
+        # 註冊時沒帶身分要被擋下，而且驗證碼不能被消耗掉
+        r = self.req("POST", "/auth/otp/verify",
+                     json={"phone": phone, "country_code": "TW", "code": code})
+        self.check("註冊未指定身分被拒",
+                   r.status_code == 400 and r.json()["error"]["code"] == "role_required",
+                   r.text[:160])
 
         r = self.req(
             "POST",
@@ -148,7 +170,7 @@ class Smoke:
             json={"phone": phone, "country_code": "TW", "code": code,
                   "role": "farmer", "display_name": "煙霧測試小農"},
         )
-        self.check("POST /auth/otp/verify", r.status_code == 200, r.text[:200])
+        self.check("同一組驗證碼補上身分後可註冊", r.status_code == 200, r.text[:200])
         if r.status_code != 200:
             return None
         tokens = r.json()
@@ -157,8 +179,20 @@ class Smoke:
         # 錯誤的驗證碼要被擋下來
         other = f"09{random.randint(10_000_000, 99_999_999)}"
         self.req("POST", "/auth/otp/request", json={"phone": other})
-        bad = self.req("POST", "/auth/otp/verify", json={"phone": other, "code": "000000"})
-        self.check("錯誤驗證碼被拒絕", bad.status_code == 401, bad.text[:160])
+        # 新號碼要帶 role，不然會先被 role_required 擋下，測不到驗證碼的檢查
+        bad = self.req("POST", "/auth/otp/verify",
+                       json={"phone": other, "code": "000000", "role": "consumer"})
+        self.check("錯誤驗證碼被拒絕",
+                   bad.status_code == 401 and bad.json()["error"]["code"] == "otp_invalid",
+                   bad.text[:160])
+
+        # 身分綁定：登入時帶別的 role 不會生效
+        auth_hdr = {"Authorization": f"Bearer {tokens['access_token']}"}
+        r = self.req("PATCH", "/me", headers=auth_hdr, json={"role": "trader"})
+        self.check("PATCH /me 不接受 role", r.status_code == 422, r.text[:160])
+        r = self.req("PATCH", "/me", headers=auth_hdr, json={"region": "雲林縣"})
+        self.check("PATCH /me 可改地區且身分不變",
+                   r.status_code == 200 and r.json()["role"] == "farmer", r.text[:160])
 
         # refresh 旋轉
         r3 = self.req("POST", "/auth/refresh", json={"refresh_token": tokens["refresh_token"]})

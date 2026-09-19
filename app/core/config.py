@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     extensions_disabled: Annotated[list[str], NoDecode] = Field(default_factory=list)
     # 每個 extension 的組態：{"tw_moa": {"api_key": "..."}}
     extensions_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # 每累積這麼多筆就寫入並提交一次。調小 = 資料更快落地、失敗時損失更少；
+    # 調大 = 交易次數少、整體吞吐高。
+    ingest_batch_size: int = Field(default=500, ge=1, le=10000)
     extension_http_timeout: float = 30.0
     extension_user_agent: str = "AgriPriceBot/0.1 (+https://example.org/agriprice)"
 

@@ -120,6 +120,13 @@ users ── quotes ────────────────────
 電話號碼接受 `0912345678`（配 `country_code`）或 `+886912345678`，
 內部統一存成 E.164。重複使用已作廢的 refresh token 會觸發該使用者全部 token 作廢。
 
+**身分在註冊時綁定。** `otp/request` 的回應會帶 `is_registered`，`false` 時
+`verify` 必須指定 `role`（`consumer` / `farmer` / `trader`），否則回 400
+`role_required`——而且這個檢查排在驗證碼比對之前，所以驗證碼不會被消耗，
+補上 role 可以用同一組碼重試。之後使用者無法自行更改身分（`PATCH /me` 不接受
+`role`），只能由維運走 `PATCH /v1/admin/users/{id}`。這樣報價上標示的
+「小農 / 盤商」才有意義。
+
 ### 讀取（公開）
 
 | 方法 | 路徑 | 說明 |
@@ -141,7 +148,7 @@ users ── quotes ────────────────────
 | POST | `/quotes` | 新增。需 `farmer` 或 `trader` 身分 |
 | PATCH | `/quotes/{id}` | 修改自己的報價 |
 | DELETE | `/quotes/{id}` | 下架（軟刪除，狀態轉 `withdrawn`） |
-| GET | `/me` / PATCH `/me` | 個人資料，可切換身分 |
+| GET | `/me` / PATCH `/me` | 個人資料（暱稱 / 地區 / 語系）。**不能改身分** |
 | GET | `/me/quotes` | 我的報價（含已下架） |
 
 報價預設 48 小時後過期，排程每 10 分鐘把過期的轉成 `expired`。
@@ -158,6 +165,8 @@ users ── quotes ────────────────────
 | GET | `/admin/mappings` | 來源代碼對照，`unmapped_only=true` 找待處理的 |
 | PUT | `/admin/mappings/{id}` | 指定對照的品項（會回填既有價格） |
 | POST | `/admin/products` | 新增標準品項 |
+| GET | `/admin/users` | 使用者清單，可依 `role` / `phone` 篩選 |
+| PATCH | `/admin/users/{id}` | 更正使用者身分（唯一能改 role 的管道） |
 | GET | `/admin/scheduler` | 排程狀態與下次執行時間 |
 
 `ADMIN_API_TOKEN` 沒設定時，所有 `/admin/*` 一律拒絕。
@@ -195,6 +204,102 @@ Extension 不碰資料庫——只要 yield `RawPrice`，正規化、市場建�
 ---
 
 ## 維運
+
+### 立即執行某個資料源
+
+不想等排程時，由快到慢有三種方式：
+
+```bash
+# 1. CLI（不必啟動服務，開發時最方便）
+python scripts/run_ingest.py --list                      # 看有哪些來源
+python scripts/run_ingest.py tw_moa --dry-run --limit 5  # 只印結果，不寫 DB
+python scripts/run_ingest.py tw_moa                      # 抓 lookback_days 天
+python scripts/run_ingest.py tw_moa --start 2026-09-01 --end 2026-09-18
+python scripts/run_ingest.py --all
+
+# 2. 管理端點（服務執行中）
+curl -X POST "localhost:8000/v1/admin/sources/tw_moa/sync" -H "X-Admin-Token: $ADMIN_API_TOKEN"
+curl -X POST "localhost:8000/v1/admin/sources/sync-all"   -H "X-Admin-Token: $ADMIN_API_TOKEN"
+
+# 3. 啟動時就跑一次
+#    .env: SCHEDULER_RUN_ON_STARTUP=true
+```
+
+新增了 extension **資料夾**：`POST /v1/admin/sources/reload` 重新掃描即可。
+改的是 **程式碼**：必須重啟服務（Python 不會重新載入已 import 的模組）。
+
+### 開發時怎麼做 OTP 驗證
+
+不會真的發簡訊。`.env` 裡兩個開關決定驗證碼從哪裡拿：
+
+```dotenv
+SMS_PROVIDER=console    # 驗證碼印在伺服器 log 的 [SMS:console] 那行
+OTP_DEBUG_ECHO=true     # 驗證碼直接回在 API response 的 debug_code 欄位
+```
+
+`OTP_DEBUG_ECHO` 在 `ENVIRONMENT=production` 時**強制失效**（程式裡寫死的），
+所以不小心帶上正式環境也不會外洩驗證碼。
+
+最省事的方式是用腳本一行拿到 token：
+
+```bash
+python scripts/dev_login.py --base http://localhost:8000
+python scripts/dev_login.py --role trader --phone 0987654321
+
+# 直接塞進 shell 變數
+eval "$(python scripts/dev_login.py --export)"
+curl -s localhost:8000/v1/me -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+手動走也可以：
+
+```bash
+curl -X POST localhost:8000/v1/auth/otp/request -H "Content-Type: application/json" \
+     -d '{"phone":"0912345678","country_code":"TW"}'
+# -> {"phone":"+88*******678","expires_at":"…","retry_after":60,"debug_code":"101120"}
+
+curl -X POST localhost:8000/v1/auth/otp/verify -H "Content-Type: application/json" \
+     -d '{"phone":"0912345678","country_code":"TW","code":"101120","role":"farmer"}'
+# -> access_token / refresh_token / user
+```
+
+**會擋到你的三個限制**（都是刻意的，正式環境要留著）：
+
+| 限制 | 預設 | 開發時的解法 |
+| --- | --- | --- |
+| 同號碼重寄冷卻 | 60 秒 | 換號碼，或 `OTP_RESEND_COOLDOWN_SECONDS=0` |
+| 同號碼每小時次數 | 5 次 | 換號碼，或 `OTP_MAX_PER_PHONE_PER_HOUR=100` |
+| 驗證碼有效期 | 5 分鐘 | `OTP_TTL_SECONDS=3600` |
+
+`dev_login.py` 省略 `--phone` 時會隨機產生號碼，所以連續跑不會撞到前兩項。
+另外每次索取新碼都會把同號碼的舊碼作廢，別拿上一封的號碼去驗。
+
+### 品項對照
+
+抓進來的官方價要**對照到標準品項**才會出現在 `/products/{id}/prices/*`。
+沒對照的資料照樣入庫（`official_prices.product_id` 為 NULL），只是查不到。
+
+```bash
+# 試算：看會對到什麼，不寫入
+python scripts/automap_products.py --source tw_moa
+
+# 確認後寫入（同時回填既有價格列的 product_id）
+python scripts/automap_products.py --source tw_moa --apply
+
+# 看對不到哪些，決定要補什麼品項或別名
+python scripts/automap_products.py --source tw_moa --show-unmatched
+```
+
+比對對象是 `product_names` 的**所有語系與別名**，所以 MOA 的「甘藍」
+會對到 `cabbage`（別名裡有「甘藍」），不需要另外維護對照表。
+規則是「全名相同」優先，其次「基底名相同」（`甘藍-初秋` → `甘藍`）。
+基底名會誤判的（例如 `蘿蔔-甜菜根`）寫在腳本的 `EXCLUDE_EXACT` 裡。
+
+要擴大覆蓋率就往 `scripts/seed_products.py` 加品項與別名，再跑一次 automap。
+
+> 有 ingest 正在跑時**不要**同時套用對照：ingest 在開始時就快取了對照表，
+> 它寫入的列會拿到當時的（NULL）`product_id`。等它跑完再 `--apply`，
+> 回填會一次補齊。
 
 ### 排程
 

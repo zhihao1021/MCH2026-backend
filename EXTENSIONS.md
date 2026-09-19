@@ -351,14 +351,29 @@ curl -s localhost:8000/v1/sources | python -m json.tool
 
 `sources` 裡要有 `tw_moa`、`installed: true`，且 `load_errors` 是空的。
 
-### 6.3 試抓一段
+### 6.3 立即試抓
+
+開發時用 CLI 最快，不必啟動服務：
+
+```bash
+# 先 dry-run：只呼叫 extension 並印出結果，完全不碰資料庫
+python scripts/run_ingest.py tw_moa --dry-run --limit 5 --start 2026-09-01 --end 2026-09-07
+
+# 確認解析正確後再真的寫入
+python scripts/run_ingest.py tw_moa --start 2026-09-01 --end 2026-09-07
+```
+
+服務已經在跑的話，也可以打管理端點：
 
 ```bash
 curl -X POST "localhost:8000/v1/admin/sources/tw_moa/sync?start=2026-09-01&end=2026-09-07" \
      -H "X-Admin-Token: $ADMIN_API_TOKEN"
 ```
 
-看 `fetched` / `written` / `skipped`，`skip_reasons` 會說明被跳過的原因。
+兩種方式都會回 `fetched` / `written` / `skipped`，`skip_reasons` 說明被跳過的原因。
+
+> 新增了 extension **資料夾**但服務已在執行：先 `POST /v1/admin/sources/reload` 重新掃描。
+> 改的是 **程式碼** 則必須重啟——Python 不會重新載入已經 import 過的模組。
 
 ### 6.4 對照品項
 

@@ -36,17 +36,24 @@ async def request_otp(payload: OtpRequestIn, session: DbSession, ip: ClientIp) -
         phone=mask_phone(phone),
         expires_at=result.expires_at,
         retry_after=result.retry_after,
+        is_registered=result.is_registered,
         debug_code=result.debug_code,
     )
 
 
-@router.post("/otp/verify", response_model=AuthResultOut, summary="驗證並登入")
+@router.post("/otp/verify", response_model=AuthResultOut, summary="驗證並登入 / 註冊")
 async def verify_otp(
     payload: OtpVerifyIn,
     session: DbSession,
     user_agent: Annotated[str | None, Header(alias="User-Agent")] = None,
 ) -> AuthResultOut:
     phone = normalize_phone(payload.phone, payload.country_code)
+
+    # 先擋沒帶身分的註冊，再驗證驗證碼——順序是刻意的：
+    # 這樣驗證碼不會被消耗掉，前端補上 role 後可以用同一組碼重試。
+    if payload.role is None and not await auth_service.phone_is_registered(session, phone):
+        raise auth_service.RoleRequiredError()
+
     await auth_service.verify_otp(session, phone, payload.code)
     user, created = await auth_service.get_or_create_user(
         session,

@@ -20,7 +20,11 @@ async def get_me(user: CurrentUser) -> UserOut:
 
 @router.patch("", response_model=UserOut, summary="更新個人資料")
 async def update_me(payload: UserUpdate, user: CurrentUser, session: DbSession) -> UserOut:
-    # 角色可以自由切換：小農偶爾也會當買家，不值得為此做審核流程
+    """可改暱稱、地區與語系。
+
+    身分（role）不在可改欄位裡——註冊時綁定之後就固定，
+    否則報價上的「小農 / 盤商」標示會失去可信度。
+    """
     for field, value in payload.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(user, field, value)

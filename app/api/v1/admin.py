@@ -16,6 +16,8 @@ from app.core.deps import AdminGuard, DbSession, Paging
 from app.core.pagination import Page
 from app.extensions.registry import registry
 from app.models.price import IngestRun
+from app.models.user import User
+from app.schemas.auth import AdminUserRoleUpdate, UserOut
 from app.schemas.catalog import (
     IngestRunOut,
     MappingAssign,
@@ -23,6 +25,8 @@ from app.schemas.catalog import (
     ProductCreate,
     ProductDetailOut,
 )
+from app.core.errors import NotFoundError
+from app.services import auth as auth_service
 from app.services import catalog as catalog_service
 from app.services import ingest as ingest_service
 
@@ -140,3 +144,43 @@ async def scheduler_status() -> dict[str, Any]:
     from app.services.scheduler import job_status
 
     return {"jobs": job_status()}
+
+
+@router.patch("/users/{user_id}", response_model=UserOut, summary="更正使用者身分")
+async def set_user_role(
+    user_id: uuid.UUID,
+    payload: AdminUserRoleUpdate,
+    session: DbSession,
+) -> UserOut:
+    """身分在註冊時綁定、使用者改不了，這裡是唯一的更正管道。
+
+    既有報價的 `role_snapshot` 不會被回溯修改——那記錄的是報價當下的事實。
+    """
+    user = await session.get(User, user_id)
+    if user is None:
+        raise NotFoundError("User not found", code="user_not_found")
+    await auth_service.admin_set_role(session, user, payload.role, reason=payload.reason)
+    return UserOut.model_validate(user)
+
+
+@router.get("/users", response_model=Page[UserOut], summary="使用者清單")
+async def list_users(
+    session: DbSession,
+    paging: Paging,
+    role: Annotated[str | None, Query(description="只看某個身分")] = None,
+    phone: Annotated[str | None, Query(description="號碼片段搜尋")] = None,
+) -> Page[UserOut]:
+    from sqlalchemy import func
+
+    stmt = select(User).order_by(User.created_at.desc())
+    count_stmt = select(func.count()).select_from(User)
+    if role:
+        stmt = stmt.where(User.role == role)
+        count_stmt = count_stmt.where(User.role == role)
+    if phone:
+        stmt = stmt.where(User.phone.ilike(f"%{phone}%"))
+        count_stmt = count_stmt.where(User.phone.ilike(f"%{phone}%"))
+
+    rows = list((await session.execute(stmt.limit(paging.limit).offset(paging.offset))).scalars())
+    total = (await session.scalar(count_stmt)) or 0
+    return Page.build([UserOut.model_validate(u) for u in rows], total, paging)

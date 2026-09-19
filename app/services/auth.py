@@ -20,7 +20,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.errors import AuthError, RateLimitError
+from app.core.errors import AppError, AuthError, RateLimitError
 from app.core.security import (
     create_token,
     generate_otp,
@@ -35,10 +35,29 @@ logger = logging.getLogger(__name__)
 
 
 class OtpRequestResult:
-    def __init__(self, expires_at: datetime, retry_after: int, debug_code: str | None) -> None:
+    def __init__(
+        self,
+        expires_at: datetime,
+        retry_after: int,
+        debug_code: str | None,
+        is_registered: bool,
+    ) -> None:
         self.expires_at = expires_at
         self.retry_after = retry_after
         self.debug_code = debug_code
+        # 前端據此決定要不要在輸入驗證碼的畫面一起顯示身分選擇
+        self.is_registered = is_registered
+
+
+class RoleRequiredError(AppError):
+    """新號碼註冊時沒有指定身分。
+
+    刻意在驗證 OTP 之前就擋下來，這樣驗證碼不會被消耗掉，
+    前端補上 role 之後可以直接用同一組碼重試。
+    """
+
+    code = "role_required"
+    message = "註冊時必須選擇身分：consumer（消費者）/ farmer（小農）/ trader（盤商）"
 
 
 async def request_otp(
@@ -110,10 +129,13 @@ async def request_otp(
     if not sent:
         logger.error("簡訊發送失敗 phone=%s", phone)
 
+    is_registered = bool(await session.scalar(select(User.id).where(User.phone == phone)))
+
     return OtpRequestResult(
         expires_at=expires_at,
         retry_after=settings.otp_resend_cooldown_seconds,
         debug_code=code if settings.otp_debug_echo and not settings.is_production else None,
+        is_registered=is_registered,
     )
 
 
@@ -172,9 +194,12 @@ async def get_or_create_user(
     now = datetime.now(UTC)
 
     if user is None:
+        # 註冊：身分必填，而且一旦建立就固定下來
+        if role is None:
+            raise RoleRequiredError()
         user = User(
             phone=phone,
-            role=role or UserRole.CONSUMER,
+            role=role,
             display_name=display_name,
             country_code=(country_code or settings.default_country_code).upper(),
             locale=settings.default_locale,
@@ -187,9 +212,13 @@ async def get_or_create_user(
             raise AuthError("此帳號已停用", code="account_disabled")
         # 首次驗證才補上時間；已有值代表之前就驗過了
         user.phone_verified_at = user.phone_verified_at or now
-        # 註冊時帶的角色只在使用者還沒設定過時採用，不覆寫既有身分
-        if role is not None and user.role is UserRole.CONSUMER:
-            user.role = role
+        # 登入：身分已綁定，request 帶什麼都不採用。
+        # 想換身分只能透過 PATCH /v1/admin/users/{id}。
+        if role is not None and role is not user.role:
+            logger.info(
+                "登入時帶的 role=%s 與既有身分 %s 不同，已忽略（phone=%s）",
+                role.value, user.role.value, phone,
+            )
         if display_name and not user.display_name:
             user.display_name = display_name
 
@@ -275,3 +304,25 @@ async def revoke_all_tokens(session: AsyncSession, user_id) -> None:
         .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=datetime.now(UTC))
     )
+
+
+async def phone_is_registered(session: AsyncSession, phone: str) -> bool:
+    return bool(await session.scalar(select(User.id).where(User.phone == phone)))
+
+
+async def admin_set_role(
+    session: AsyncSession, user: User, role: UserRole, *, reason: str | None = None
+) -> User:
+    """維運用：更正使用者身分。
+
+    身分在註冊時綁定，使用者自己改不了，但打錯字這種事還是得有救。
+    既有報價的 `role_snapshot` 不會被回溯修改——那是當下的事實紀錄。
+    """
+    before = user.role
+    user.role = role
+    await session.flush()
+    logger.warning(
+        "管理端變更身分：user=%s %s -> %s（原因：%s）",
+        user.id, before.value, role.value, reason or "未填",
+    )
+    return user

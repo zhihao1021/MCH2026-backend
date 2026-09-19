@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.database import session_scope
 from app.extensions.base import FetchWindow, PriceSource, RawMarket, RawPrice
 from app.extensions.http import http_client
@@ -29,8 +30,9 @@ from app.models.price import IngestRun, OfficialPrice
 
 logger = logging.getLogger(__name__)
 
-# 每累積這麼多筆就寫一次 DB。太小會拖慢，太大會吃記憶體並拉長交易時間。
-BATCH_SIZE = 500
+# 每累積這麼多筆就寫入並提交一次。太小交易次數會爆炸，太大則資料落地得慢、
+# 中途失敗損失也多。可用 .env 的 INGEST_BATCH_SIZE 調整。
+BATCH_SIZE = settings.ingest_batch_size
 
 
 @dataclass
@@ -224,7 +226,10 @@ async def _run_window(
             window_end=end,
         )
         session.add(run)
-        await session.flush()
+        # 先把執行紀錄提交出去：後續每批也會提交，
+        # 所以就算整段中途死掉，ingest_runs 仍留得下這次跑到哪裡
+        await session.commit()
+        run_id, ds_id = run.id, ds.id
 
         window = FetchWindow(start=start, end=end, cursor=ds.cursor or {}, is_backfill=is_backfill)
         loader = _Loader(session, ext, ds)
@@ -233,6 +238,7 @@ async def _run_window(
             if ext.manifest.provides_markets:
                 markets = await source.fetch_markets()
                 result.markets_created += await loader.upsert_markets(markets)
+                await _checkpoint(session, run, result, loader)
 
             batch: list[RawPrice] = []
             async for raw in source.fetch_prices(window):
@@ -241,8 +247,12 @@ async def _run_window(
                 if len(batch) >= BATCH_SIZE:
                     await loader.write_batch(batch, result)
                     batch.clear()
+                    # 每批就提交：長區間回補不必等整段跑完才落地，
+                    # 中途失敗也只損失最後不到一批的進度（upsert 讓重跑安全）
+                    await _checkpoint(session, run, result, loader)
             if batch:
                 await loader.write_batch(batch, result)
+                await _checkpoint(session, run, result, loader)
 
             result.markets_created += loader.markets_created
             result.mappings_created += loader.mappings_created
@@ -253,27 +263,78 @@ async def _run_window(
             ds.last_error = None
             run.status = IngestStatus.SUCCESS if not result.skipped else IngestStatus.PARTIAL
             result.status = run.status
+
+            result.duration_ms = int((time.perf_counter() - began) * 1000)
+            run.records_fetched = result.fetched
+            run.records_written = result.written
+            run.records_skipped = result.skipped
+            run.markets_created = result.markets_created
+            run.mappings_created = result.mappings_created
+            run.finished_at = datetime.now(UTC)
+            run.duration_ms = result.duration_ms
         except Exception as exc:
             logger.exception("來源 %s 抓取失敗（%s ~ %s）", ext.key, start, end)
             message = f"{type(exc).__name__}: {exc}"[:2000]
             result.status = IngestStatus.FAILED
             result.error = message
-            run.status = IngestStatus.FAILED
-            run.error = message
-            ds.last_run_at = datetime.now(UTC)
-            ds.last_error = message
-            # 保留原游標，下次從同一點重試
+            result.duration_ms = int((time.perf_counter() - began) * 1000)
 
-        result.duration_ms = int((time.perf_counter() - began) * 1000)
-        run.records_fetched = result.fetched
-        run.records_written = result.written
-        run.records_skipped = result.skipped
-        run.markets_created = result.markets_created
-        run.mappings_created = result.mappings_created
-        run.finished_at = datetime.now(UTC)
-        run.duration_ms = result.duration_ms
+            # 失敗當下這個交易可能已經不可用（例如 DB 端的錯誤），
+            # 先退掉未提交的部分，再用一個乾淨的 session 記錄失敗。
+            # 已經 checkpoint 提交過的資料會留著——upsert 讓重跑是安全的。
+            try:
+                await session.rollback()
+            except Exception:  # pragma: no cover
+                logger.exception("rollback 失敗")
+            await _mark_failed(run_id, ds_id, result, message)
+            # 游標保持原值，下次從同一點重試
 
     return result
+
+
+async def _mark_failed(run_id: int, ds_id: Any, result: IngestResult, message: str) -> None:
+    """用獨立的 session 記錄失敗，避開已經壞掉的交易。"""
+    try:
+        async with session_scope() as session:
+            await session.execute(
+                update(IngestRun)
+                .where(IngestRun.id == run_id)
+                .values(
+                    status=IngestStatus.FAILED,
+                    error=message,
+                    records_fetched=result.fetched,
+                    records_written=result.written,
+                    records_skipped=result.skipped,
+                    finished_at=datetime.now(UTC),
+                    duration_ms=result.duration_ms,
+                )
+            )
+            await session.execute(
+                update(DataSource)
+                .where(DataSource.id == ds_id)
+                .values(last_run_at=datetime.now(UTC), last_error=message)
+            )
+    except Exception:  # pragma: no cover - 連記錄失敗都失敗時不要蓋掉原始錯誤
+        logger.exception("記錄 ingest 失敗狀態時又失敗了（run_id=%s）", run_id)
+
+
+async def _checkpoint(
+    session: AsyncSession, run: IngestRun, result: IngestResult, loader: "_Loader"
+) -> None:
+    """把目前的進度寫進 ingest_runs 並提交。
+
+    這樣做有兩個好處：抓到的資料立刻落地（長區間回補不會全有全無），
+    以及 `/v1/admin/ingest-runs` 看得到即時進度而不是等跑完才出現數字。
+
+    session 是 `expire_on_commit=False`，所以 commit 之後 loader 快取的
+    Market / ProductSourceMapping 物件仍然可用，不會觸發重新載入。
+    """
+    run.records_fetched = result.fetched
+    run.records_written = result.written
+    run.records_skipped = result.skipped
+    run.markets_created = result.markets_created + loader.markets_created
+    run.mappings_created = result.mappings_created + loader.mappings_created
+    await session.commit()
 
 
 async def _record_failure(ext: LoadedExtension, result: IngestResult, trigger: str) -> None:
