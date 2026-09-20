@@ -90,3 +90,40 @@ class IntentExclusion(StrEnum):
     NON_LOCAL = "non_local"        # 不在該區域生活圈內
     UNTRUSTED_IP = "untrusted_ip"  # 來自機房 / Proxy IP
     ZERO_WEIGHT = "zero_weight"    # 信譽權重已降到 0
+
+
+class StoreType(StrEnum):
+    """消費者回報零售價時，那個價格是在哪種通路看到的。
+
+    通路別會直接影響價格水準（量販 < 超市 < 便利商店），所以聚合時
+    必須分開看——把便利商店和批發市場的價格混在一起平均，算出來的
+    「零售價」哪一邊都不像。
+    """
+
+    SUPERMARKET = "supermarket"      # 超市
+    HYPERMARKET = "hypermarket"      # 量販店
+    CONVENIENCE = "convenience"      # 便利商店
+    WET_MARKET = "wet_market"        # 傳統市場 / 菜市場
+    GROCERY = "grocery"              # 雜貨店 / 小商店
+    ONLINE = "online"                # 電商
+    COOPERATIVE = "cooperative"      # 合作社 / 農會直營
+    OTHER = "other"
+
+
+class RetailReportStatus(StrEnum):
+    ACTIVE = "active"
+    WITHDRAWN = "withdrawn"    # 回報者自行撤回
+    HIDDEN = "hidden"          # 遭檢舉或違規下架
+
+
+class RetailExclusion(StrEnum):
+    """這筆零售回報為什麼沒被計入聚合。
+
+    **刻意沒有 below_floor。** 意向價格低於成本底線代表惡意壓價，
+    但零售價低只是看到特價——那是真實資訊，擋掉反而讓看板失真。
+    """
+
+    OUTLIER = "outlier"            # 偏離中位數過遠
+    SHADOWED = "shadowed"          # 回報者被影子封禁
+    UNTRUSTED_IP = "untrusted_ip"  # 來自機房 / Proxy IP
+    ZERO_WEIGHT = "zero_weight"    # 信譽權重已降到 0

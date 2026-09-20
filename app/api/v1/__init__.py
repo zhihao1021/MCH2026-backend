@@ -10,6 +10,7 @@ from app.api.v1 import (
     markets,
     products,
     quotes,
+    retail,
     sources,
     users,
 )
@@ -26,6 +27,8 @@ api_router.include_router(intents.product_router)
 api_router.include_router(intents.me_router)
 api_router.include_router(markets.router)
 api_router.include_router(quotes.router)
+api_router.include_router(retail.product_router)
+api_router.include_router(retail.me_router)
 api_router.include_router(sources.router)
 api_router.include_router(admin.router)
 api_router.include_router(intents.admin_router)

@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     intent_cooldown_days: int = Field(default=7, ge=0, le=365)
     intent_geofence_km: float = Field(default=15.0, ge=0.0)
     intent_block_hosting_ip: bool = True
+
+    # ---- 消費者回報的零售價 ----
+    # 看板只看近期回報。零售價變動快，兩週前的標價已經沒有參考價值
+    retail_lookback_days: int = Field(default=14, ge=1, le=365)
+    # 同一人 × 同一品項 × 同一店家的冷卻期。零售回報是觀察不是意願，
+    # 同一個人本來就可能在多家店看到不同價格，所以冷卻期綁到店家層級，
+    # 而且比意向價格（7 天）短得多——超市改價本來就頻繁
+    retail_cooldown_hours: int = Field(default=24, ge=0, le=8760)
+    # 允許補登多久以前看到的價格。太舊的無從查證，也拉不回當期行情
+    retail_max_observation_age_days: int = Field(default=7, ge=0, le=90)
     # 目標三：信譽權重
     intent_weight_initial: float = Field(default=1.0, ge=0.0, le=2.0)
     intent_weight_min: float = Field(default=0.0, ge=0.0)

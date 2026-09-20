@@ -16,12 +16,16 @@ from app.models.enums import (
     ProductCategory,
     QuoteSide,
     QuoteStatus,
+    RetailExclusion,
+    RetailReportStatus,
+    StoreType,
     UserRole,
 )
 from app.models.favorite import ProductFavorite
 from app.models.intent import IntentNotification, PriceIntent, UserReputation
 from app.models.price import IngestRun, OfficialPrice
 from app.models.quote import Quote
+from app.models.retail import RetailPriceReport
 from app.models.user import OtpCode, RefreshToken, User
 
 __all__ = [
@@ -46,6 +50,10 @@ __all__ = [
     "QuoteSide",
     "QuoteStatus",
     "RefreshToken",
+    "RetailExclusion",
+    "RetailPriceReport",
+    "RetailReportStatus",
+    "StoreType",
     "User",
     "UserRole",
     "UserReputation",
