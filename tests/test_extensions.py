@@ -23,6 +23,8 @@ from app.extensions.base import (
     SourceContext,
     SourceManifest,
 )
+from app.extensions.demo_mock.catalogue import PRODUCTS
+from app.extensions.demo_mock.source import _covers
 from app.extensions.http import build_client
 from app.extensions.registry import ExtensionRegistry, registry
 from app.models.enums import IngestStatus
@@ -225,23 +227,95 @@ def test_unknown_extension_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _demo_prices(window: FetchWindow, ext=None) -> list[RawPrice]:
+    ext = ext or registry.get("demo_mock")
+    client = build_client()
+    try:
+        source = ext.instantiate(client)
+        return [r async for r in source.fetch_prices(window)]
+    finally:
+        await client.aclose()
+
+
 @pytest.mark.anyio
 async def test_demo_mock_is_deterministic() -> None:
+    """同樣的輸入永遠得到同樣的價格——測試才有辦法斷言。"""
     registry.discover(force=True)
-    ext = registry.get("demo_mock")
     window = FetchWindow(start=date(2026, 9, 14), end=date(2026, 9, 16))
 
-    async def collect() -> list[RawPrice]:
-        client = build_client()
-        try:
-            source = ext.instantiate(client)
-            return [r async for r in source.fetch_prices(window)]
-        finally:
-            await client.aclose()
-
-    first, second = await collect(), await collect()
-    assert len(first) == 30  # 3 個工作日 x 2 市場 x 5 品項
+    first, second = await _demo_prices(window), await _demo_prices(window)
+    assert first
     assert [r.price_avg for r in first] == [r.price_avg for r in second]
+    assert [r.market_external_id for r in first] == [r.market_external_id for r in second]
+
+
+@pytest.mark.anyio
+async def test_demo_mock_row_count_follows_the_catalogue() -> None:
+    """筆數不寫死，改從目錄推算，這樣加作物時測試不會無故壞掉。"""
+    registry.discover(force=True)
+    day = date(2026, 9, 14)  # 星期一
+    rows = await _demo_prices(FetchWindow(start=day, end=day))
+
+    expected = sum(
+        len(p.markets)
+        for p in PRODUCTS
+        if any(_covers(s.start_month, s.end_month, day.month) for s in p.seasons) or p.year_round
+    )
+    assert len(rows) == expected
+
+
+@pytest.mark.anyio
+async def test_demo_mock_omits_out_of_season_crops() -> None:
+    """不在產季又沒有全年供應的作物，當天就是沒有報價。
+
+    重點是**不報**，而不是報一個假價格——空白代表沒到貨，
+    畫成 0 元或硬給一個數字都會讓前端的曲線說謊。
+    """
+    registry.discover(force=True)
+    # 芒果只有 4–7 月（summer_fruit），9 月不該出現
+    rows = await _demo_prices(FetchWindow(start=date(2026, 9, 14), end=date(2026, 9, 14)))
+    codes = {r.product_code for r in rows}
+    assert "IN-MANGO" not in codes
+    assert "IN-CAULIFLOWER" not in codes    # winter_veg 11–2
+
+    # 5 月時芒果要在，9 月的冬季蔬菜仍然不在
+    may = await _demo_prices(FetchWindow(start=date(2026, 5, 11), end=date(2026, 5, 11)))
+    assert "IN-MANGO" in {r.product_code for r in may}
+
+
+@pytest.mark.anyio
+async def test_demo_mock_peak_season_is_cheaper_than_off_season() -> None:
+    """盛產期到貨量大、價格低；產季外靠冷藏或調貨，明顯偏貴。"""
+    registry.discover(force=True)
+    # 馬鈴薯 rabi 盛產 1–3 月，全年供應
+    jan = [r for r in await _demo_prices(FetchWindow(start=date(2026, 1, 12), end=date(2026, 1, 12)))
+           if r.product_code == "IN-POTATO"]
+    sep = [r for r in await _demo_prices(FetchWindow(start=date(2026, 9, 14), end=date(2026, 9, 14)))
+           if r.product_code == "IN-POTATO"]
+    assert jan and sep
+    assert min(r.price_avg for r in sep) > max(r.price_avg for r in jan)
+
+    # 到貨量則相反
+    assert max(r.volume for r in jan) > max(r.volume for r in sep)
+
+
+@pytest.mark.anyio
+async def test_demo_mock_monsoon_is_regional() -> None:
+    """印度各地雨季不同，同一天同一作物的漲幅不該全國一致。
+
+    坦米爾那都靠的是 10–12 月的東北季風，西南季風 6–9 月時它不受影響。
+    這條如果壞了，代表季風被寫成全國同時發生——那條曲線就不像真的。
+    """
+    registry.discover(force=True)
+    day = date(2026, 9, 14)   # 西南季風尾聲
+    rows = {
+        r.market_external_id: r
+        for r in await _demo_prices(FetchWindow(start=day, end=day))
+        if r.product_code == "IN-BRINJAL"   # perishable
+    }
+    assert rows["KOYB"].raw["monsoon"] is False   # 坦米爾那都
+    assert rows["KOLK"].raw["monsoon"] is True    # 西孟加拉
+    assert rows["BNGL"].raw["monsoon"] is True    # 卡納塔卡
 
 
 @pytest.mark.anyio
@@ -261,7 +335,7 @@ async def test_demo_mock_skips_sundays() -> None:
 
 @pytest.mark.anyio
 async def test_demo_mock_config_filters_markets(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "extensions_config", {"demo_mock": {"markets": ["DM01"]}})
+    monkeypatch.setattr(settings, "extensions_config", {"demo_mock": {"markets": ["AZDP"]}})
     reg = ExtensionRegistry()
     reg.discover(force=True)
     client = build_client()
@@ -270,7 +344,7 @@ async def test_demo_mock_config_filters_markets(monkeypatch) -> None:
         markets = await source.fetch_markets()
     finally:
         await client.aclose()
-    assert [m.external_id for m in markets] == ["DM01"]
+    assert [m.external_id for m in markets] == ["AZDP"]
 
 
 @pytest.mark.anyio

@@ -69,7 +69,7 @@ app/
     ├── base.py          契約
     ├── registry.py      目錄掃描與載入
     ├── http.py          共用 HTTP client + 重試
-    └── demo_mock/       範例來源（離線可用的假資料）
+    └── demo_mock/       範例來源（印度 APMC，離線可用的模擬行情）
 ```
 
 ### 資料模型
@@ -232,6 +232,20 @@ Extension 不碰資料庫——只要 yield `RawPrice`，正規化、市場建�
 單位換算、去重 upsert、排程都由框架處理。
 
 `demo_mock` 是可以直接照抄的範本，也讓沒有網路時整條 ingest 流程仍跑得動。
+它模擬印度 10 個 APMC mandi 的 22 種作物，價格會跟著**產季、季風與休市日**
+走而不是純亂數——亂數曲線在前端看起來很假，也驗證不了漲跌顯示。
+作物與市場清單見 `app/extensions/demo_mock/catalogue.py`。
+
+首次使用要跑兩步，順序不能顛倒：
+
+```bash
+python scripts/run_ingest.py demo_mock --start 2026-09-05 --end 2026-09-20
+python scripts/seed_india_demo.py --apply
+```
+
+第二步建立來源代碼與平台品項的對照，並**回填**第一步寫進去的價格。
+少了它，價格雖然入庫但 `product_id` 是 NULL，App 端整批看不到。
+
 正式環境請在 `.env` 設 `EXTENSIONS_DISABLED=demo_mock` 關掉。
 
 ---
